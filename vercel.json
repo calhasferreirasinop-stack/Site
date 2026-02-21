@@ -1,36 +1,42 @@
 {
-  "version": 2,
-  "builds": [
+  "buildCommand": "vite build",
+  "outputDirectory": "dist",
+  "rewrites": [
     {
-      "src": "server.ts",
-      "use": "@vercel/node"
+      "source": "/api/auth/check",
+      "destination": "/api/auth"
     },
     {
-      "src": "package.json",
-      "use": "@vercel/static-build",
-      "config": { "distDir": "dist" }
-    }
-  ],
-  "routes": [
-    {
-      "src": "/api/(.*)",
-      "dest": "server.ts"
+      "source": "/api/auth/change-password",
+      "destination": "/api/auth"
     },
     {
-      "src": "/uploads/(.*)",
-      "dest": "server.ts"
+      "source": "/api/gallery/bulk-delete",
+      "destination": "/api/gallery/bulk-delete"
     },
     {
-      "src": "/(.*)",
-      "dest": "/$1",
-      "continue": true
+      "source": "/api/gallery/:id",
+      "destination": "/api/gallery/[id]"
     },
     {
-      "handle": "filesystem"
+      "source": "/api/services/:id",
+      "destination": "/api/services/[id]"
     },
     {
-      "src": "/(.*)",
-      "dest": "index.html"
+      "source": "/api/posts/:id",
+      "destination": "/api/posts/[id]"
+    },
+    {
+      "source": "/api/testimonials/:id",
+      "destination": "/api/testimonials/[id]"
+    },
+    {
+      "source": "/api/(.*)",
+      "destination": "/api/$1"
+    },
+    {
+      "source": "/(.*)",
+      "destination": "/index.html"
     }
   ]
 }
