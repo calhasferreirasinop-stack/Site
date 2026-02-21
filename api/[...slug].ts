@@ -96,14 +96,14 @@ app.post('/api/login', async (req, res) => {
     const { data: users } = await supabase.from('users').select('*').eq('username', username).limit(1);
     const user = users?.[0];
     if (user && bcrypt.compareSync(password, user.password)) {
-        res.setHeader('Set-Cookie', `admin_session=authenticated; HttpOnly; Secure; SameSite=None; Max-Age=${30 * 24 * 60 * 60}; Path=/`);
+        res.setHeader('Set-Cookie', `admin_session=authenticated; HttpOnly; Secure; SameSite=Lax; Max-Age=${30 * 24 * 60 * 60}; Path=/`);
         return res.json({ success: true });
     }
     return res.status(401).json({ error: 'Invalid credentials' });
 });
 
 app.post('/api/logout', (_req, res) => {
-    res.setHeader('Set-Cookie', 'admin_session=; HttpOnly; Secure; SameSite=None; Max-Age=0; Path=/');
+    res.setHeader('Set-Cookie', 'admin_session=; HttpOnly; Secure; SameSite=Lax; Max-Age=0; Path=/');
     res.json({ success: true });
 });
 

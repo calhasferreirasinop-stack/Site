@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { motion } from 'motion/react';
 import { Droplets, ShieldCheck, Wrench, ArrowRight, CheckCircle2 } from 'lucide-react';
+import ImageCarousel from '../components/ImageCarousel';
 
 interface Service {
   id: number;
@@ -32,13 +33,19 @@ export default function Services() {
     });
   }, []);
 
-  const getServiceGallery = (serviceId: number) => {
-    return gallery.filter(item => item.serviceId === serviceId).slice(0, 3);
+  const getServiceImages = (serviceId: number): string[] => {
+    const galleryImages = gallery
+      .filter(item => item.serviceId === serviceId)
+      .map(item => item.imageUrl);
+    // show gallery images; use the service image only as fallback if no gallery images
+    return galleryImages;
   };
+
+  const icons = [Droplets, ShieldCheck, Wrench, Wrench, Wrench];
 
   return (
     <div className="bg-white min-h-screen">
-      {/* Hero Section - Editorial Style */}
+      {/* Hero Section */}
       <section className="relative pt-32 pb-20 overflow-hidden">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 relative z-10">
           <div className="max-w-3xl">
@@ -68,19 +75,21 @@ export default function Services() {
             </motion.p>
           </div>
         </div>
-        
+
         {/* Background Accent */}
         <div className="absolute top-0 right-0 w-1/2 h-full bg-slate-50 -z-10 hidden lg:block">
           <div className="absolute inset-0 opacity-20" style={{ backgroundImage: 'radial-gradient(#141414 1px, transparent 1px)', backgroundSize: '24px 24px' }} />
         </div>
       </section>
 
-      {/* Services Grid - Technical/Clean Style */}
+      {/* Services Grid */}
       <section className="py-24 bg-slate-50">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="grid grid-cols-1 gap-24">
             {services.map((service, index) => {
-              const serviceGallery = getServiceGallery(service.id);
+              const serviceImages = getServiceImages(service.id);
+              const Icon = icons[index] ?? Wrench;
+
               return (
                 <motion.div
                   key={service.id}
@@ -89,40 +98,35 @@ export default function Services() {
                   viewport={{ once: true }}
                   className="grid grid-cols-1 lg:grid-cols-2 gap-16 items-center"
                 >
+                  {/* Image / Carousel side */}
                   <div className={`${index % 2 !== 0 ? 'lg:order-last' : ''}`}>
                     <div className="relative aspect-[4/3] rounded-3xl overflow-hidden shadow-2xl group">
-                      <img
-                        src={service.imageUrl || 'https://picsum.photos/seed/service/800/600'}
-                        alt={service.title}
-                        className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-105"
-                        referrerPolicy="no-referrer"
-                      />
-                      <div className="absolute inset-0 bg-gradient-to-t from-black/60 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-500 flex items-end p-8">
-                        <p className="text-white font-medium">Projeto Realizado por Ferreira Calhas</p>
-                      </div>
+                      {serviceImages.length > 0 ? (
+                        <ImageCarousel
+                          images={serviceImages}
+                          alt={service.title}
+                          className="rounded-3xl"
+                        />
+                      ) : (
+                        /* Fallback: placeholder when no gallery photos yet */
+                        <div className="w-full h-full bg-slate-200 flex flex-col items-center justify-center gap-3 text-slate-400">
+                          <Icon size={48} />
+                          <p className="text-sm font-medium">Adicione fotos no painel admin</p>
+                        </div>
+                      )}
                     </div>
-                    
-                    {/* Mini Gallery Preview */}
-                    {serviceGallery.length > 0 && (
-                      <div className="grid grid-cols-3 gap-4 mt-6">
-                        {serviceGallery.map((item) => (
-                          <div key={item.id} className="aspect-square rounded-xl overflow-hidden shadow-sm border border-white">
-                            <img src={item.imageUrl} alt="Gallery" className="w-full h-full object-cover" referrerPolicy="no-referrer" />
-                          </div>
-                        ))}
-                      </div>
-                    )}
                   </div>
 
+                  {/* Text side */}
                   <div className="flex flex-col gap-6">
                     <div className="w-16 h-16 bg-white rounded-2xl shadow-sm flex items-center justify-center text-brand-primary border border-slate-100">
-                      {index === 0 ? <Droplets size={32} /> : index === 1 ? <ShieldCheck size={32} /> : <Wrench size={32} />}
+                      <Icon size={32} />
                     </div>
                     <h2 className="text-3xl md:text-4xl font-bold text-slate-900 tracking-tight">{service.title}</h2>
                     <p className="text-lg text-slate-600 leading-relaxed">
                       {service.description}
                     </p>
-                    
+
                     <ul className="space-y-4 mt-4">
                       {[
                         'Materiais de primeira linha',
@@ -156,7 +160,7 @@ export default function Services() {
         </div>
       </section>
 
-      {/* Why Choose Us - Modern Grid */}
+      {/* Why Choose Us */}
       <section className="py-32 bg-white">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="text-center max-w-3xl mx-auto mb-20">
