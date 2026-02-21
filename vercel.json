@@ -3,36 +3,8 @@
   "outputDirectory": "dist",
   "rewrites": [
     {
-      "source": "/api/auth/check",
-      "destination": "/api/auth"
-    },
-    {
-      "source": "/api/auth/change-password",
-      "destination": "/api/auth"
-    },
-    {
-      "source": "/api/gallery/bulk-delete",
-      "destination": "/api/gallery/bulk-delete"
-    },
-    {
-      "source": "/api/gallery/:id",
-      "destination": "/api/gallery/[id]"
-    },
-    {
-      "source": "/api/services/:id",
-      "destination": "/api/services/[id]"
-    },
-    {
-      "source": "/api/posts/:id",
-      "destination": "/api/posts/[id]"
-    },
-    {
-      "source": "/api/testimonials/:id",
-      "destination": "/api/testimonials/[id]"
-    },
-    {
       "source": "/api/(.*)",
-      "destination": "/api/$1"
+      "destination": "/api/[...slug]"
     },
     {
       "source": "/(.*)",
