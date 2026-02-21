@@ -65,7 +65,8 @@ export default function Home() {
         <div className="absolute inset-0 z-0">
           <img
             src="https://images.unsplash.com/photo-1621905235277-f25426251799?q=80&w=1920&auto=format&fit=crop"
-            alt="Hero Background"
+            alt=""
+            aria-hidden="true"
             className="w-full h-full object-cover brightness-[0.4]"
             referrerPolicy="no-referrer"
           />
