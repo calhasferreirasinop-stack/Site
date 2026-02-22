@@ -141,6 +141,11 @@ app.post('/api/settings', authenticate, async (req, res) => {
             logoUrl = await uploadToStorage(logoFile.buffer, logoFile.originalname, logoFile.mimetype);
             upserts.push({ key: 'logoUrl', value: logoUrl });
         }
+        const heroFile = files.find(f => f.fieldname === 'heroImage');
+        if (heroFile) {
+            const heroImageUrl = await uploadToStorage(heroFile.buffer, heroFile.originalname, heroFile.mimetype);
+            upserts.push({ key: 'heroImageUrl', value: heroImageUrl });
+        }
     } else {
         upserts = Object.entries(req.body || {}).map(([key, value]) => ({ key, value: String(value) }));
     }
@@ -207,6 +212,22 @@ app.delete('/api/services/:id', authenticate, async (req, res) => {
     const id = parseInt(req.params.id);
     if (isNaN(id)) return res.status(400).json({ error: 'Invalid ID' });
     try { await deleteService(id, res); } catch { res.status(500).json({ error: 'Internal server error' }); }
+});
+
+// Upload da foto de destaque de cada serviço para a tela inicial
+app.post('/api/services/:id/home-image', authenticate, async (req, res) => {
+    const id = parseInt(req.params.id);
+    if (isNaN(id)) return res.status(400).json({ error: 'Invalid ID' });
+    try {
+        const { files } = await parseMultipart(req);
+        const imgFile = files.find(f => f.fieldname === 'homeImage');
+        if (!imgFile) return res.status(400).json({ error: 'No image uploaded' });
+        const homeImageUrl = await uploadToStorage(imgFile.buffer, imgFile.originalname, imgFile.mimetype);
+        await supabase.from('services').update({ homeImageUrl }).eq('id', id);
+        res.json({ success: true, homeImageUrl });
+    } catch (e: any) {
+        res.status(500).json({ error: e.message });
+    }
 });
 
 // --- Posts ---
@@ -353,10 +374,12 @@ app.post('/api/seed', async (req, res) => {
         await supabase.from('settings').insert([
             { key: 'companyName', value: 'Ferreira Calhas' },
             { key: 'whatsapp', value: '5566996172808' },
+            { key: 'email', value: 'comercialferreiracalhas@gmail.com' },
             { key: 'address', value: 'Avenida Jose Goncalves, 931, Sinop - MT, Brasil' },
             { key: 'aboutText', value: 'Especialistas em fabricação e instalação de calhas, rufos e pingadeiras em Sinop e região.' },
             { key: 'heroTitle', value: 'Proteção e Estética para o seu Telhado' },
             { key: 'heroSubtitle', value: 'Fabricação própria de calhas e rufos com a qualidade que sua obra merece.' },
+            { key: 'heroImageUrl', value: '' },
             { key: 'logoUrl', value: '' },
         ]);
     }

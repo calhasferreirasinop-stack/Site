@@ -2,14 +2,13 @@ import { useState, useEffect } from 'react';
 import { motion } from 'motion/react';
 import { ArrowRight, CheckCircle2, Shield, Clock, Star, MessageCircle } from 'lucide-react';
 import { Link } from 'react-router-dom';
-import ImageCarousel from '../components/ImageCarousel';
 
 interface Settings {
   heroTitle: string;
   heroSubtitle: string;
   aboutText: string;
   whatsapp?: string;
-  address?: string;
+  heroImageUrl?: string;
 }
 
 interface Service {
@@ -17,12 +16,7 @@ interface Service {
   title: string;
   description: string;
   imageUrl: string;
-}
-
-interface GalleryItem {
-  id: number;
-  imageUrl: string;
-  serviceId: number;
+  homeImageUrl?: string;
 }
 
 interface Testimonial {
@@ -32,6 +26,8 @@ interface Testimonial {
   rating: number;
 }
 
+const HERO_FALLBACK = 'https://images.unsplash.com/photo-1621905235277-f25426251799?q=80&w=1920&auto=format&fit=crop';
+
 export default function Home() {
   const [settings, setSettings] = useState<Settings>({
     heroTitle: 'Proteção e Estética para o seu Telhado',
@@ -39,24 +35,20 @@ export default function Home() {
     aboutText: 'Especialistas em fabricação e instalação de calhas, rufos e pingadeiras em Sinop e região.'
   });
   const [services, setServices] = useState<Service[]>([]);
-  const [gallery, setGallery] = useState<GalleryItem[]>([]);
   const [testimonials, setTestimonials] = useState<Testimonial[]>([]);
 
   useEffect(() => {
     fetch('/api/settings').then(res => res.json()).then(setSettings);
     fetch('/api/services').then(res => res.json()).then(setServices);
-    fetch('/api/gallery').then(res => res.json()).then(setGallery);
     fetch('/api/testimonials').then(res => res.json()).then(setTestimonials);
   }, []);
 
-  const getServiceImages = (service: Service): string[] => {
-    const galleryImages = gallery
-      .filter(item => item.serviceId === service.id)
-      .map(item => item.imageUrl);
-    // Fallback to service's own image if gallery is empty
-    if (galleryImages.length === 0 && service.imageUrl) return [service.imageUrl];
-    return galleryImages;
+  // Foto do card de serviço na home: homeImageUrl > imageUrl > placeholder
+  const getServiceHomeImage = (service: Service): string => {
+    return service.homeImageUrl || service.imageUrl || `https://picsum.photos/seed/service${service.id}/600/400`;
   };
+
+  const heroImage = settings.heroImageUrl || HERO_FALLBACK;
 
   return (
     <div className="overflow-hidden">
@@ -64,7 +56,7 @@ export default function Home() {
       <section className="relative h-screen flex items-center pt-20">
         <div className="absolute inset-0 z-0">
           <img
-            src="https://images.unsplash.com/photo-1621905235277-f25426251799?q=80&w=1920&auto=format&fit=crop"
+            src={heroImage}
             alt=""
             aria-hidden="true"
             className="w-full h-full object-cover brightness-[0.4]"
@@ -181,7 +173,7 @@ export default function Home() {
         </div>
       </section>
 
-      {/* Featured Services — com carrossel de fotos */}
+      {/* Featured Services — 1 foto estática por serviço (configurável no admin) */}
       <section className="py-24 bg-white">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="text-center mb-16">
@@ -189,43 +181,40 @@ export default function Home() {
             <p className="text-slate-500 max-w-2xl mx-auto">Oferecemos soluções completas para o escoamento de água e proteção do seu imóvel.</p>
           </div>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
-            {services.slice(0, 3).map((service) => {
-              const images = getServiceImages(service);
-              return (
-                <motion.div
-                  key={service.id}
-                  whileHover={{ y: -10 }}
-                  className="bg-slate-50 rounded-3xl overflow-hidden border border-slate-100 group"
-                >
-                  {/* Carrossel de fotos do serviço */}
-                  <div className="h-64 overflow-hidden relative">
-                    <ImageCarousel
-                      images={images}
-                      alt={service.title}
-                      intervalMs={4000}
-                    />
+            {services.slice(0, 3).map((service) => (
+              <motion.div
+                key={service.id}
+                whileHover={{ y: -10 }}
+                className="bg-slate-50 rounded-3xl overflow-hidden border border-slate-100 group"
+              >
+                <div className="h-64 overflow-hidden">
+                  <img
+                    src={getServiceHomeImage(service)}
+                    alt={service.title}
+                    className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-500"
+                    referrerPolicy="no-referrer"
+                  />
+                </div>
+                <div className="p-8">
+                  <h3 className="text-xl font-bold mb-4">{service.title}</h3>
+                  <p className="text-slate-600 text-sm leading-relaxed mb-6">
+                    {service.description}
+                  </p>
+                  <div className="flex items-center justify-between gap-4">
+                    <Link to="/servicos" className="text-brand-primary font-bold text-sm flex items-center gap-2">
+                      Saiba mais <ArrowRight className="w-4 h-4" />
+                    </Link>
+                    <button
+                      onClick={() => window.open(`https://wa.me/${settings.whatsapp || '5566996172808'}?text=${encodeURIComponent(`Olá, gostaria de um orçamento para ${service.title}`)}`, '_blank')}
+                      className="bg-brand-primary/10 hover:bg-brand-primary text-brand-primary hover:text-white p-2 rounded-xl transition-all"
+                      title="Solicitar Orçamento"
+                    >
+                      <MessageCircle className="w-5 h-5" />
+                    </button>
                   </div>
-                  <div className="p-8">
-                    <h3 className="text-xl font-bold mb-4">{service.title}</h3>
-                    <p className="text-slate-600 text-sm leading-relaxed mb-6">
-                      {service.description}
-                    </p>
-                    <div className="flex items-center justify-between gap-4">
-                      <Link to="/servicos" className="text-brand-primary font-bold text-sm flex items-center gap-2">
-                        Saiba mais <ArrowRight className="w-4 h-4" />
-                      </Link>
-                      <button
-                        onClick={() => window.open(`https://wa.me/${settings.whatsapp || '5566996172808'}?text=${encodeURIComponent(`Olá, gostaria de um orçamento para ${service.title}`)}`, '_blank')}
-                        className="bg-brand-primary/10 hover:bg-brand-primary text-brand-primary hover:text-white p-2 rounded-xl transition-all"
-                        title="Solicitar Orçamento"
-                      >
-                        <MessageCircle className="w-5 h-5" />
-                      </button>
-                    </div>
-                  </div>
-                </motion.div>
-              );
-            })}
+                </div>
+              </motion.div>
+            ))}
           </div>
         </div>
       </section>

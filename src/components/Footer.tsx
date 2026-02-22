@@ -1,6 +1,18 @@
-import { Instagram, Phone, MapPin, Hammer, MessageCircle } from 'lucide-react';
+import { Instagram, Phone, MapPin, Hammer, MessageCircle, Mail } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { useState, useEffect } from 'react';
+
+/** Formata número armazenado (ex: 5566996172808) para exibição: (66) 99617-2808 */
+function formatPhone(raw: string = ''): string {
+  const digits = raw.replace(/\D/g, '').replace(/^55/, '');
+  if (digits.length === 11) {
+    return `(${digits.slice(0, 2)}) ${digits.slice(2, 7)}-${digits.slice(7)}`;
+  }
+  if (digits.length === 10) {
+    return `(${digits.slice(0, 2)}) ${digits.slice(2, 6)}-${digits.slice(6)}`;
+  }
+  return raw;
+}
 
 export default function Footer() {
   const [settings, setSettings] = useState<any>({});
@@ -9,9 +21,13 @@ export default function Footer() {
     fetch('/api/settings').then(res => res.json()).then(setSettings);
   }, []);
 
-  const whatsapp = settings.whatsapp || '5566996172808';
-  const whatsappUrl = `https://wa.me/${whatsapp}`;
+  const whatsappRaw = settings.whatsapp || '5566996172808';
+  // wa.me exige código do país — guarda o '55' apenas na URL
+  const whatsappNumber = whatsappRaw.replace(/\D/g, '');
+  const waNumber = whatsappNumber.startsWith('55') ? whatsappNumber : `55${whatsappNumber}`;
+  const whatsappUrl = `https://wa.me/${waNumber}`;
   const instagramUrl = 'https://www.instagram.com/ferreira.calhas';
+  const email = settings.email || 'comercialferreiracalhas@gmail.com';
 
   return (
     <footer className="bg-brand-dark text-slate-300 pt-16 pb-8">
@@ -43,7 +59,7 @@ export default function Footer() {
             </p>
 
             {/* Caixa Siga-nos */}
-            <div className="bg-slate-800/60 rounded-2xl p-5 border border-slate-700/50">
+            <div className="bg-slate-800/60 rounded-2xl p-5 border border-slate-700/50 overflow-hidden">
               <p className="text-xs font-bold uppercase tracking-widest text-slate-400 mb-4">
                 Siga-nos nas redes sociais
               </p>
@@ -53,10 +69,9 @@ export default function Footer() {
                   href={instagramUrl}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="flex items-center gap-2 bg-gradient-to-br from-pink-500 via-red-500 to-yellow-400 text-white px-4 py-2.5 rounded-xl font-bold text-sm hover:opacity-90 transition-all shadow-lg shadow-pink-500/20 hover:scale-105"
-                  title="Instagram"
+                  className="inline-flex items-center gap-2 bg-gradient-to-br from-pink-500 via-red-500 to-yellow-400 text-white px-4 py-2.5 rounded-xl font-bold text-sm hover:opacity-90 transition-opacity shadow-lg"
                 >
-                  <Instagram className="w-5 h-5" />
+                  <Instagram className="w-4 h-4 shrink-0" />
                   <span>Instagram</span>
                 </a>
 
@@ -65,10 +80,9 @@ export default function Footer() {
                   href={whatsappUrl}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="flex items-center gap-2 bg-green-500 text-white px-4 py-2.5 rounded-xl font-bold text-sm hover:bg-green-400 transition-all shadow-lg shadow-green-500/20 hover:scale-105"
-                  title="WhatsApp"
+                  className="inline-flex items-center gap-2 bg-green-500 text-white px-4 py-2.5 rounded-xl font-bold text-sm hover:bg-green-400 transition-colors shadow-lg"
                 >
-                  <MessageCircle className="w-5 h-5" />
+                  <MessageCircle className="w-4 h-4 shrink-0" />
                   <span>WhatsApp</span>
                 </a>
               </div>
@@ -101,29 +115,27 @@ export default function Footer() {
           <div>
             <h3 className="text-white font-bold uppercase tracking-wider text-sm mb-6">Contato</h3>
             <ul className="space-y-4 text-sm">
-              <li className="flex items-start gap-3">
-                <MapPin className="w-5 h-5 text-brand-primary shrink-0 mt-0.5" />
-                <span>{settings.address || 'Atendimento em toda região'}</span>
-              </li>
+              {settings.address && (
+                <li className="flex items-start gap-3">
+                  <MapPin className="w-5 h-5 text-brand-primary shrink-0 mt-0.5" />
+                  <span>{settings.address}</span>
+                </li>
+              )}
               <li className="flex items-center gap-3">
                 <Phone className="w-5 h-5 text-brand-primary shrink-0" />
-                <a
-                  href={whatsappUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="hover:text-brand-primary transition-colors"
-                >
-                  {whatsapp}
+                <a href={whatsappUrl} target="_blank" rel="noopener noreferrer" className="hover:text-brand-primary transition-colors">
+                  {formatPhone(whatsappRaw)}
+                </a>
+              </li>
+              <li className="flex items-center gap-3">
+                <Mail className="w-5 h-5 text-brand-primary shrink-0" />
+                <a href={`mailto:${email}`} className="hover:text-brand-primary transition-colors break-all">
+                  {email}
                 </a>
               </li>
               <li className="flex items-center gap-3">
                 <Instagram className="w-5 h-5 text-brand-primary shrink-0" />
-                <a
-                  href={instagramUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="hover:text-brand-primary transition-colors"
-                >
+                <a href={instagramUrl} target="_blank" rel="noopener noreferrer" className="hover:text-brand-primary transition-colors">
                   @ferreira.calhas
                 </a>
               </li>

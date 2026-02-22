@@ -8,6 +8,7 @@ export default function Admin() {
   const [activeTab, setActiveTab] = useState<'settings' | 'services' | 'posts' | 'gallery' | 'testimonials'>('settings');
   const [settings, setSettings] = useState<any>({});
   const [logoFile, setLogoFile] = useState<File | null>(null);
+  const [heroFile, setHeroFile] = useState<File | null>(null);
   const [services, setServices] = useState<any[]>([]);
   const [posts, setPosts] = useState<any[]>([]);
   const [gallery, setGallery] = useState<any[]>([]);
@@ -56,12 +57,12 @@ export default function Admin() {
   const fetchData = async (isSilent = false) => {
     if (!isSilent) setLoading(true);
     else setRefreshing(true);
-    
+
     try {
       const res = await fetch('/api/admin/data', { credentials: 'include' });
-      
+
       if (res.status === 401) return navigate('/login');
-      
+
       if (!res.ok) {
         const text = await res.text();
         throw new Error(text || `Erro ${res.status}`);
@@ -117,9 +118,10 @@ export default function Admin() {
   const handleSaveSettings = async () => {
     const formData = new FormData();
     Object.entries(settings).forEach(([key, value]) => {
-      if (key !== 'logoUrl') formData.append(key, String(value));
+      if (key !== 'logoUrl' && key !== 'heroImageUrl') formData.append(key, String(value));
     });
     if (logoFile) formData.append('logo', logoFile);
+    if (heroFile) formData.append('heroImage', heroFile);
 
     const res = await fetch('/api/settings', {
       method: 'POST',
@@ -130,6 +132,8 @@ export default function Admin() {
     if (res.status === 401) return navigate('/login');
 
     alert('Configurações salvas!');
+    setLogoFile(null);
+    setHeroFile(null);
     fetchData();
   };
 
@@ -140,8 +144,8 @@ export default function Admin() {
     formData.append('description', newService.description);
     if (newService.image) formData.append('image', newService.image);
 
-    const res = await fetch('/api/services', { 
-      method: 'POST', 
+    const res = await fetch('/api/services', {
+      method: 'POST',
       body: formData,
       credentials: 'include'
     });
@@ -158,8 +162,8 @@ export default function Admin() {
     formData.append('content', newPost.content);
     if (newPost.image) formData.append('image', newPost.image);
 
-    const res = await fetch('/api/posts', { 
-      method: 'POST', 
+    const res = await fetch('/api/posts', {
+      method: 'POST',
       body: formData,
       credentials: 'include'
     });
@@ -176,13 +180,13 @@ export default function Admin() {
     const formData = new FormData();
     formData.append('description', newGalleryItem.description);
     if (newGalleryItem.serviceId) formData.append('serviceId', newGalleryItem.serviceId);
-    
+
     newGalleryItem.images.forEach(image => {
       formData.append('images', image);
     });
 
-    const res = await fetch('/api/gallery', { 
-      method: 'POST', 
+    const res = await fetch('/api/gallery', {
+      method: 'POST',
       body: formData,
       credentials: 'include'
     });
@@ -209,7 +213,7 @@ export default function Admin() {
   const handleDelete = async (type: string, id: number) => {
     // Debug alert to see if the function is even reached
     console.log(`DEBUG: handleDelete chamado para ${type} com ID ${id}`);
-    
+
     if (!id) {
       alert('Erro: ID inválido');
       return;
@@ -220,14 +224,14 @@ export default function Admin() {
     }
 
     try {
-      const res = await fetch(`/api/${type}/delete/${id}`, { 
+      const res = await fetch(`/api/${type}/delete/${id}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include'
       });
-      
+
       if (res.status === 401) return navigate('/login');
-      
+
       if (res.ok) {
         await fetchData(true);
         alert('Excluído com sucesso!');
@@ -243,7 +247,7 @@ export default function Admin() {
 
   const handleBulkDeleteGallery = async () => {
     if (selectedGalleryIds.length === 0) return;
-    
+
     if (!window.confirm(`Deseja excluir as ${selectedGalleryIds.length} fotos selecionadas?`)) {
       return;
     }
@@ -273,7 +277,7 @@ export default function Admin() {
   };
 
   const toggleGallerySelection = (id: number) => {
-    setSelectedGalleryIds(prev => 
+    setSelectedGalleryIds(prev =>
       prev.includes(id) ? prev.filter(i => i !== id) : [...prev, id]
     );
   };
@@ -302,15 +306,14 @@ export default function Admin() {
                   <button
                     key={tab.id}
                     onClick={() => setActiveTab(tab.id as any)}
-                    className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-bold transition-all ${
-                      activeTab === tab.id ? 'bg-brand-primary text-white shadow-lg shadow-brand-primary/20' : 'text-slate-600 hover:bg-slate-50'
-                    }`}
+                    className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-bold transition-all ${activeTab === tab.id ? 'bg-brand-primary text-white shadow-lg shadow-brand-primary/20' : 'text-slate-600 hover:bg-slate-50'
+                      }`}
                   >
                     <tab.icon className="w-4 h-4" />
                     {tab.label}
                   </button>
                 ))}
-                
+
                 <div className="pt-4 mt-4 border-t border-slate-100">
                   <button
                     onClick={handleLogout}
@@ -395,6 +398,16 @@ export default function Admin() {
                       />
                     </div>
                     <div>
+                      <label className="block text-sm font-bold text-slate-700 mb-2">E-mail de Contato</label>
+                      <input
+                        type="email"
+                        value={settings.email || ''}
+                        onChange={(e) => setSettings({ ...settings, email: e.target.value })}
+                        className="w-full bg-slate-50 border-none rounded-2xl px-6 py-4 focus:ring-2 focus:ring-brand-primary transition-all"
+                        placeholder="comercialferreiracalhas@gmail.com"
+                      />
+                    </div>
+                    <div>
                       <label className="block text-sm font-bold text-slate-700 mb-2">Texto Sobre a Empresa</label>
                       <textarea
                         rows={4}
@@ -402,6 +415,22 @@ export default function Admin() {
                         onChange={(e) => setSettings({ ...settings, aboutText: e.target.value })}
                         className="w-full bg-slate-50 border-none rounded-2xl px-6 py-4 focus:ring-2 focus:ring-brand-primary transition-all"
                       />
+                    </div>
+
+                    {/* Foto da Tela Inicial */}
+                    <div className="p-6 bg-slate-50 rounded-2xl">
+                      <label className="block text-sm font-bold text-slate-700 mb-3">📸 Foto de Fundo da Tela Inicial</label>
+                      {settings.heroImageUrl && (
+                        <img src={settings.heroImageUrl} alt="Hero atual" className="w-full h-40 object-cover rounded-xl mb-4" />
+                      )}
+                      <input
+                        type="file"
+                        accept="image/*"
+                        onChange={(e) => setHeroFile(e.target.files?.[0] || null)}
+                        className="text-xs text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-xs file:font-bold file:bg-brand-primary file:text-white hover:file:bg-brand-primary/90 cursor-pointer"
+                      />
+                      {heroFile && <p className="text-xs text-brand-primary font-bold mt-2">{heroFile.name} selecionado</p>}
+                      <p className="text-xs text-slate-400 mt-2">Se não selecionar, mantém a foto atual.</p>
                     </div>
                   </div>
                   <button
@@ -441,7 +470,7 @@ export default function Admin() {
                   <div className="flex justify-between items-center">
                     <h2 className="text-2xl font-bold">Gerenciar Serviços</h2>
                   </div>
-                  
+
                   <form onSubmit={handleAddService} className="bg-slate-50 p-8 rounded-3xl space-y-6">
                     <h3 className="font-bold text-slate-900 flex items-center gap-2"><Plus className="w-5 h-5 text-brand-primary" /> Adicionar Novo Serviço</h3>
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -475,26 +504,63 @@ export default function Admin() {
 
                   <div className="grid grid-cols-1 gap-4">
                     {services.map((service) => (
-                      <div key={service.id} className="flex items-center justify-between p-6 bg-white border border-slate-100 rounded-3xl hover:shadow-md transition-all">
-                        <div className="flex items-center gap-4">
-                          <img src={service.imageUrl} className="w-16 h-16 rounded-xl object-cover" />
-                          <div>
-                            <h4 className="font-bold">{service.title}</h4>
-                            <p className="text-xs text-slate-500 line-clamp-1">{service.description}</p>
+                      <div key={service.id} className="p-6 bg-white border border-slate-100 rounded-3xl hover:shadow-md transition-all">
+                        <div className="flex items-center justify-between mb-4">
+                          <div className="flex items-center gap-4">
+                            <img src={service.imageUrl} className="w-16 h-16 rounded-xl object-cover" />
+                            <div>
+                              <h4 className="font-bold">{service.title}</h4>
+                              <p className="text-xs text-slate-500 line-clamp-1">{service.description}</p>
+                            </div>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              handleDelete('services', service.id);
+                            }}
+                            className="text-red-500 p-3 hover:bg-red-50 rounded-xl transition-all cursor-pointer"
+                            title="Excluir Serviço"
+                          >
+                            <Trash2 className="w-5 h-5" />
+                          </button>
+                        </div>
+
+                        {/* Upload foto destaque na home */}
+                        <div className="border-t border-slate-100 pt-4">
+                          <p className="text-xs font-bold text-slate-500 uppercase tracking-widest mb-3">🏠 Foto de destaque na tela inicial</p>
+                          <div className="flex items-center gap-4">
+                            {service.homeImageUrl && (
+                              <img src={service.homeImageUrl} alt="Foto home" className="w-20 h-16 rounded-lg object-cover border border-slate-200" />
+                            )}
+                            <div className="flex-1">
+                              <input
+                                type="file"
+                                accept="image/*"
+                                onChange={async (e) => {
+                                  const file = e.target.files?.[0];
+                                  if (!file) return;
+                                  const fd = new FormData();
+                                  fd.append('homeImage', file);
+                                  const res = await fetch(`/api/services/${service.id}/home-image`, {
+                                    method: 'POST',
+                                    body: fd,
+                                    credentials: 'include'
+                                  });
+                                  if (res.ok) {
+                                    setToast({ show: true, message: 'Foto da home atualizada!', type: 'success' });
+                                    fetchData(true);
+                                  } else {
+                                    setToast({ show: true, message: 'Erro ao salvar foto.', type: 'error' });
+                                  }
+                                }}
+                                className="text-xs text-slate-500 file:mr-3 file:py-1.5 file:px-3 file:rounded-full file:border-0 file:text-xs file:font-bold file:bg-slate-100 file:text-slate-700 hover:file:bg-brand-primary hover:file:text-white cursor-pointer"
+                              />
+                              <p className="text-[10px] text-slate-400 mt-1">Esta foto aparece nos cards da tela inicial</p>
+                            </div>
                           </div>
                         </div>
-                        <button 
-                          type="button"
-                          onClick={(e) => {
-                            e.preventDefault();
-                            e.stopPropagation();
-                            handleDelete('services', service.id);
-                          }} 
-                          className="text-red-500 p-3 hover:bg-red-50 rounded-xl transition-all cursor-pointer"
-                          title="Excluir Serviço"
-                        >
-                          <Trash2 className="w-5 h-5" />
-                        </button>
                       </div>
                     ))}
                   </div>
@@ -545,13 +611,13 @@ export default function Admin() {
                             <p className="text-xs text-slate-500">{new Date(post.createdAt).toLocaleDateString()}</p>
                           </div>
                         </div>
-                        <button 
+                        <button
                           type="button"
                           onClick={(e) => {
                             e.preventDefault();
                             e.stopPropagation();
                             handleDelete('posts', post.id);
-                          }} 
+                          }}
                           className="text-red-500 p-3 hover:bg-red-50 rounded-xl transition-all cursor-pointer"
                           title="Excluir Post"
                         >
@@ -563,7 +629,7 @@ export default function Admin() {
                 </div>
               )}
 
-                  {activeTab === 'gallery' && (
+              {activeTab === 'gallery' && (
                 <div className="space-y-12 animate-in fade-in duration-500">
                   <div className="flex justify-between items-center mb-6">
                     <h2 className="text-2xl font-bold">Galeria de Fotos</h2>
@@ -635,21 +701,19 @@ export default function Admin() {
 
                   <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                     {gallery.map((item) => (
-                      <div 
-                        key={item.id} 
-                        className={`relative group aspect-square rounded-2xl overflow-hidden border transition-all ${
-                          selectedGalleryIds.includes(item.id) ? 'ring-4 ring-brand-primary border-brand-primary' : 'border-slate-100'
-                        }`}
+                      <div
+                        key={item.id}
+                        className={`relative group aspect-square rounded-2xl overflow-hidden border transition-all ${selectedGalleryIds.includes(item.id) ? 'ring-4 ring-brand-primary border-brand-primary' : 'border-slate-100'
+                          }`}
                         onClick={() => toggleGallerySelection(item.id)}
                       >
                         <img src={item.imageUrl} className="w-full h-full object-cover" />
-                        
+
                         {/* Checkbox Overlay */}
-                        <div className={`absolute top-3 right-3 w-6 h-6 rounded-md border-2 flex items-center justify-center transition-all ${
-                          selectedGalleryIds.includes(item.id) 
-                            ? 'bg-brand-primary border-brand-primary' 
+                        <div className={`absolute top-3 right-3 w-6 h-6 rounded-md border-2 flex items-center justify-center transition-all ${selectedGalleryIds.includes(item.id)
+                            ? 'bg-brand-primary border-brand-primary'
                             : 'bg-white/50 border-white opacity-0 group-hover:opacity-100'
-                        }`}>
+                          }`}>
                           {selectedGalleryIds.includes(item.id) && (
                             <div className="w-2 h-4 border-r-2 border-b-2 border-white rotate-45 mb-1" />
                           )}
@@ -664,14 +728,14 @@ export default function Admin() {
                         </div>
 
                         {/* Delete Button - Simplified for maximum reliability */}
-                        <button 
+                        <button
                           type="button"
                           onClick={(e) => {
                             e.preventDefault();
                             e.stopPropagation();
                             console.log('CLICK DIRETO NO BOTÃO');
                             handleDelete('gallery', item.id);
-                          }} 
+                          }}
                           className="absolute bottom-2 right-2 bg-red-600 text-white p-2 rounded-xl z-[100] shadow-xl hover:scale-110 active:scale-95 transition-transform cursor-pointer flex items-center justify-center"
                           style={{ minWidth: '40px', minHeight: '40px' }}
                         >
@@ -734,13 +798,13 @@ export default function Admin() {
                           </div>
                           <p className="text-sm text-slate-600 italic">"{t.content}"</p>
                         </div>
-                        <button 
+                        <button
                           type="button"
                           onClick={(e) => {
                             e.preventDefault();
                             e.stopPropagation();
                             handleDelete('testimonials', t.id);
-                          }} 
+                          }}
                           className="text-red-500 p-3 hover:bg-red-50 rounded-xl transition-all shrink-0 cursor-pointer"
                           title="Excluir Depoimento"
                         >
@@ -759,7 +823,7 @@ export default function Admin() {
       {/* Floating Bulk Action Bar */}
       <AnimatePresence>
         {selectedGalleryIds.length > 0 && (
-          <motion.div 
+          <motion.div
             initial={{ y: 100, opacity: 0 }}
             animate={{ y: 0, opacity: 1 }}
             exit={{ y: 100, opacity: 0 }}
@@ -772,7 +836,7 @@ export default function Admin() {
                 </div>
                 <div>
                   <p className="text-sm font-bold">{selectedGalleryIds.length} selecionados</p>
-                  <button 
+                  <button
                     onClick={() => setSelectedGalleryIds([])}
                     className="text-[10px] text-slate-400 hover:text-white transition-colors uppercase tracking-widest font-bold"
                   >
@@ -780,7 +844,7 @@ export default function Admin() {
                   </button>
                 </div>
               </div>
-              
+
               <div className="flex items-center gap-2">
                 <button
                   onClick={() => setSelectedGalleryIds([])}
