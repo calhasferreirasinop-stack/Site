@@ -224,18 +224,24 @@ app.post('/api/settings', requireMaster as any, async (req, res) => {
 });
 
 // ── ADMIN DATA ───────────────────────────────────────────────────────────────
-app.get('/api/admin/data', requireAdmin as any, async (req: any, res) => {
+app.get('/api/admin/data', authenticate as any, async (req: any, res) => {
     try {
-        const [settingsRes, servicesRes, postsRes, galleryRes, testimonialsRes, quotesRes, inventoryRes] = await Promise.all([
+        const isAdminOrMaster = req.user.role === 'admin' || req.user.role === 'master';
+        const [settingsRes, servicesRes, postsRes, galleryRes, testimonialsRes, inventoryRes] = await Promise.all([
             supabase.from('settings').select('*'),
             supabase.from('services').select('*'),
             supabase.from('posts').select('*').order('createdAt', { ascending: false }),
             supabase.from('gallery').select('*').order('createdAt', { ascending: false }),
             supabase.from('testimonials').select('*').order('createdAt', { ascending: false }),
-            supabase.from('quotes').select('*').order('createdAt', { ascending: false }),
             supabase.from('inventory').select('*').order('purchasedAt', { ascending: false }),
         ]);
-        const usersRes = await supabase.from('users').select('id,username,name,email,phone,role,active,"createdAt"').order('createdAt', { ascending: false });
+        // Quotes: user sees only own, admin/master sees all
+        let quotesQuery = supabase.from('quotes').select('*').order('createdAt', { ascending: false });
+        if (!isAdminOrMaster) quotesQuery = quotesQuery.eq('clientId', req.user.id);
+        const quotesRes = await quotesQuery;
+        const usersRes = isAdminOrMaster
+            ? await supabase.from('users').select('id,username,name,email,phone,role,active,"createdAt"').order('createdAt', { ascending: false })
+            : { data: [] };
         const settings = (settingsRes.data || []).reduce((acc: any, c: any) => ({ ...acc, [c.key]: c.value }), {});
         res.json({
             settings,
@@ -244,7 +250,7 @@ app.get('/api/admin/data', requireAdmin as any, async (req: any, res) => {
             gallery: galleryRes.data || [],
             testimonials: testimonialsRes.data || [],
             quotes: quotesRes.data || [],
-            inventory: inventoryRes.data || [],
+            inventory: isAdminOrMaster ? (inventoryRes.data || []) : [],
             users: usersRes.data || [],
             currentUser: req.user,
         });
@@ -368,7 +374,7 @@ app.get('/api/quotes', authenticate as any, async (req: any, res) => {
 });
 
 app.post('/api/quotes', authenticate as any, async (req: any, res) => {
-    const { clientName, bends, notes, totalValue: passedTotal, adminCreated } = req.body || {};
+    const { clientName, bends, notes, totalValue: passedTotal, adminCreated, status: requestedStatus } = req.body || {};
     let totalM2 = 0;
     if (Array.isArray(bends)) {
         for (const b of bends) totalM2 += parseFloat(b.m2 || 0);
@@ -377,12 +383,13 @@ app.post('/api/quotes', authenticate as any, async (req: any, res) => {
     const sett = (settRows || []).reduce((a: any, s: any) => ({ ...a, [s.key]: s.value }), {});
     const pricePerM2 = parseFloat(sett.pricePerM2 || '50');
     const totalValue = adminCreated && passedTotal ? parseFloat(passedTotal) : totalM2 * pricePerM2;
+    const quoteStatus = requestedStatus === 'rascunho' ? 'rascunho' : 'pending';
 
     const { data: quote, error } = await supabase.from('quotes').insert({
         clientId: req.user.id,
         clientName: clientName || req.user.name || req.user.username,
         createdBy: req.user.id,
-        totalM2, totalValue, finalValue: totalValue, notes, status: 'pending',
+        totalM2, totalValue, finalValue: totalValue, notes, status: quoteStatus,
     }).select().single();
     if (error) return res.status(500).json({ error: error.message });
 
@@ -557,6 +564,84 @@ app.get('/api/financial/summary', requireAdmin as any, async (_req, res) => {
         countAll: allD.length, countToday: todD.length, countMonth: monD.length,
         ticketAverage: allD.length > 0 ? sum(allD) / allD.length : 0,
     });
+});
+
+// ── PIX KEYS ─────────────────────────────────────────────────────────────────
+app.get('/api/pix-keys', async (_req, res) => {
+    const { data } = await supabase.from('pix_keys').select('*').eq('active', true).order('sortOrder', { ascending: true });
+    res.json(data || []);
+});
+app.get('/api/pix-keys/all', requireMaster as any, async (_req, res) => {
+    const { data } = await supabase.from('pix_keys').select('*').order('sortOrder', { ascending: true });
+    res.json(data || []);
+});
+app.post('/api/pix-keys', requireMaster as any, async (req, res) => {
+    const ct = req.headers['content-type'] || '';
+    let label: string, pixKey: string, pixCode: string, qrCodeUrl: string | null = null;
+    if (ct.includes('multipart/form-data')) {
+        const { fields, files } = await parseMultipart(req);
+        label = fields.label || ''; pixKey = fields.pixKey || ''; pixCode = fields.pixCode || '';
+        const f = files.find(x => x.fieldname === 'qrCode');
+        if (f) qrCodeUrl = await uploadToStorage(f.buffer, f.originalname, f.mimetype);
+    } else {
+        ({ label, pixKey, pixCode } = req.body || {});
+    }
+    const { data, error } = await supabase.from('pix_keys').insert({
+        label: label || '', pixKey: pixKey || '', pixCode: pixCode || '',
+        qrCodeUrl: qrCodeUrl || '', active: true,
+    }).select().single();
+    if (error) return res.status(500).json({ error: error.message });
+    res.json(data);
+});
+app.put('/api/pix-keys/:id', requireMaster as any, async (req: any, res) => {
+    const id = parseInt(req.params.id);
+    const ct = req.headers['content-type'] || '';
+    let updateData: any = {};
+    if (ct.includes('multipart/form-data')) {
+        const { fields, files } = await parseMultipart(req);
+        if (fields.label !== undefined) updateData.label = fields.label;
+        if (fields.pixKey !== undefined) updateData.pixKey = fields.pixKey;
+        if (fields.pixCode !== undefined) updateData.pixCode = fields.pixCode;
+        if (fields.active !== undefined) updateData.active = fields.active === 'true';
+        if (fields.sortOrder !== undefined) updateData.sortOrder = parseInt(fields.sortOrder);
+        const f = files.find(x => x.fieldname === 'qrCode');
+        if (f) updateData.qrCodeUrl = await uploadToStorage(f.buffer, f.originalname, f.mimetype);
+    } else {
+        const { label, pixKey, pixCode, active, sortOrder } = req.body || {};
+        updateData = { label, pixKey, pixCode, active, sortOrder };
+    }
+    const { data, error } = await supabase.from('pix_keys').update(updateData).eq('id', id).select().single();
+    if (error) return res.status(500).json({ error: error.message });
+    res.json(data);
+});
+app.delete('/api/pix-keys/:id', requireMaster as any, async (req, res) => {
+    await supabase.from('pix_keys').delete().eq('id', parseInt(req.params.id));
+    res.json({ success: true });
+});
+
+// ── INVENTORY BATCH ──────────────────────────────────────────────────────────
+app.post('/api/inventory/batch', requireAdmin as any, async (req: any, res) => {
+    const { entries } = req.body || {};
+    if (!Array.isArray(entries) || entries.length === 0) return res.status(400).json({ error: 'entries required' });
+    const inserts = entries.map((e: any) => {
+        const wM = parseFloat(e.widthM) || 1.20;
+        const lM = parseFloat(e.lengthM) || 33;
+        return {
+            description: e.description, widthM: wM, lengthM: lM,
+            availableM2: wM * lM, costPerUnit: parseFloat(e.costPerUnit) || 0,
+            notes: e.notes, lowStockThresholdM2: parseFloat(e.lowStockThresholdM2) || 5,
+        };
+    });
+    const { data, error } = await supabase.from('inventory').insert(inserts).select();
+    if (error) return res.status(500).json({ error: error.message });
+    // Create transactions for each
+    if (data) {
+        const txns = data.map((d: any) => ({
+            inventoryId: d.id, type: 'purchase', m2Amount: d.availableM2, createdBy: req.user.id,
+        }));
+        await supabase.from('inventory_transactions').insert(txns);
+    }
+    res.json(data);
 });
 
 // ── SEED (initial setup) ─────────────────────────────────────────────────────

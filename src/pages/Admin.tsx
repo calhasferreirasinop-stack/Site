@@ -87,6 +87,7 @@ export default function Admin() {
 
   const handleLogout = async () => {
     await fetch('/api/logout', { method: 'POST' });
+    localStorage.removeItem('user');
     navigate('/login');
   };
 
@@ -178,7 +179,7 @@ export default function Admin() {
     { id: 'gallery', label: 'Galeria', icon: LayoutGrid, show: isMaster },
     { id: 'testimonials', label: 'Depoimentos', icon: Star, show: isMaster },
     { id: 'users', label: 'Usuários', icon: Users, show: isAdmin },
-    { id: 'quotes', label: 'Orçamentos', icon: ClipboardList, show: isAdmin, badge: pendingCount },
+    { id: 'quotes', label: 'Orçamentos', icon: ClipboardList, show: true, badge: pendingCount },
     { id: 'inventory', label: 'Estoque', icon: Package, show: isAdmin },
     { id: 'financial', label: 'Financeiro', icon: TrendingUp, show: isMaster },
   ].filter(t => t.show);
@@ -479,7 +480,7 @@ export default function Admin() {
               )}
 
               {/* ─── QUOTES ─── */}
-              {activeTab === 'quotes' && isAdmin && (
+              {activeTab === 'quotes' && (
                 <QuotesTab quotes={quotes} currentUser={currentUser} onSave={() => fetchData(true)} showToast={showToast} />
               )}
 

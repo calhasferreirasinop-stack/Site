@@ -11,19 +11,13 @@ import Admin from './pages/Admin';
 import Login from './pages/Login';
 import Orcamento from './pages/Orcamento';
 
-// Only /admin hides the site navbar (it has its own internal nav)
-// /login is a standalone page without chrome
-// All other pages (including /orcamento) show the full navbar
-const NO_NAVBAR = ['/admin', '/login'];
-
 function AppContent() {
   const location = useLocation();
-  const isAdmin = location.pathname.startsWith('/admin');
-  const showNavbar = !NO_NAVBAR.some(p => location.pathname.startsWith(p));
+  const isAdmin = location.pathname.startsWith('/admin') || location.pathname.startsWith('/central');
 
   return (
     <div className="min-h-screen flex flex-col bg-slate-50 font-sans text-slate-900">
-      {showNavbar && <Navbar />}
+      <Navbar />
       <main className="flex-grow">
         <Routes>
           <Route path="/" element={<Home />} />
@@ -36,8 +30,13 @@ function AppContent() {
               <Orcamento />
             </ErrorBoundary>
           } />
-          {/* Central do Usuário — /admin (manter compatibilidade) */}
+          {/* Central do Usuário — /admin e /central (manter compatibilidade) */}
           <Route path="/admin" element={
+            <ErrorBoundary>
+              <Admin />
+            </ErrorBoundary>
+          } />
+          <Route path="/central" element={
             <ErrorBoundary>
               <Admin />
             </ErrorBoundary>

@@ -329,6 +329,15 @@ export default function QuotesTab({ quotes, currentUser, onSave, showToast }: Pr
                                             </div>
                                         </div>
                                     )}
+                                    {/* User can cancel unpaid quotes */}
+                                    {!isAdminOrMaster && q.status !== 'paid' && q.status !== 'cancelled' && q.status !== 'finished' && (
+                                        <div>
+                                            <button onClick={() => updateStatus(q.id, 'cancelled')}
+                                                className="px-3 py-1.5 bg-red-500 text-white text-xs font-bold rounded-xl hover:bg-red-600 cursor-pointer flex items-center gap-1">
+                                                <X className="w-3.5 h-3.5" /> Cancelar Orçamento
+                                            </button>
+                                        </div>
+                                    )}
                                 </div>
                             )}
                         </div>

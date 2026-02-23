@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Lock, User, Hammer } from 'lucide-react';
 
@@ -8,6 +8,29 @@ export default function Login() {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
+
+  // If already logged in, redirect immediately
+  useEffect(() => {
+    const stored = localStorage.getItem('user');
+    if (stored) {
+      try {
+        const u = JSON.parse(stored);
+        if (u.authenticated) {
+          // Verify with server
+          fetch('/api/auth/check', { credentials: 'include' })
+            .then(r => r.json())
+            .then(d => {
+              if (d.authenticated) {
+                if (d.role === 'user') navigate('/orcamento');
+                else navigate('/admin');
+              } else {
+                localStorage.removeItem('user');
+              }
+            });
+        }
+      } catch { /* ignore */ }
+    }
+  }, []);
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -24,6 +47,13 @@ export default function Login() {
 
       if (response.ok) {
         const data = await response.json();
+        // Persist auth in localStorage for session hydration
+        localStorage.setItem('user', JSON.stringify({
+          authenticated: true,
+          role: data.role,
+          name: data.name,
+          id: data.id,
+        }));
         // role: user → goes to Orcamento (their workspace)
         // role: admin / master → goes to Central do Usuário (admin panel)
         if (data.role === 'user') {
@@ -42,7 +72,7 @@ export default function Login() {
   };
 
   return (
-    <div className="min-h-screen bg-slate-900 flex items-center justify-center p-4">
+    <div className="min-h-screen bg-slate-900 flex items-center justify-center p-4 pt-24">
       <div className="max-w-md w-full bg-slate-800 border border-white/10 rounded-[2.5rem] p-8 md:p-12 shadow-2xl">
         <div className="text-center mb-10">
           <div className="inline-flex items-center justify-center w-16 h-16 bg-brand-primary rounded-2xl mb-6 shadow-lg shadow-brand-primary/30">

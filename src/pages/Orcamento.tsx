@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'motion/react';
-import { Plus, Trash2, ChevronRight, ChevronLeft, Check, AlertTriangle, Printer, Copy, Send, RefreshCw, Undo2, FileDown, ZoomIn, X, PenLine } from 'lucide-react';
+import { Plus, Trash2, ChevronRight, ChevronLeft, Check, AlertTriangle, Printer, Copy, Send, RefreshCw, Undo2, FileDown, ZoomIn, X, PenLine, Save, List, Eye } from 'lucide-react';
 import BendCanvas, { Risk, RiskDirection, DIRECTION_ICONS, OPPOSITE_DIRECTION } from '../components/BendCanvas';
 
 // ─── Official rounding rule ────────────────────────────────────────────────────
@@ -16,7 +16,16 @@ function roundToMultipleOf5(value: number): number {
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 interface Bend { id: string; risks: Risk[]; totalWidthCm: number; roundedWidthCm: number; lengths: string[]; totalLengthM: number; m2: number; svgDataUrl?: string; }
-interface SavedBend { risks: Risk[]; roundedWidthCm: number; useCount: number; }
+interface SavedBend { risks: Risk[]; roundedWidthCm: number; useCount: number; svgDataUrl?: string; }
+
+const STATUS_LABELS: Record<string, { label: string; color: string }> = {
+    rascunho: { label: 'Rascunho', color: 'bg-slate-500' },
+    pending: { label: 'Aguardando Pgto', color: 'bg-yellow-500' },
+    paid: { label: 'Pago', color: 'bg-green-500' },
+    in_production: { label: 'Em Produção', color: 'bg-blue-500' },
+    finished: { label: 'Finalizado', color: 'bg-slate-600' },
+    cancelled: { label: 'Cancelado', color: 'bg-red-500' },
+};
 
 // ─── Direction grid ───────────────────────────────────────────────────────────
 const DIR_GRID: { dir: RiskDirection; icon: string; label: string; grad: string }[] = [
@@ -65,6 +74,13 @@ export default function Orcamento() {
     const [step, setStep] = useState<'bends' | 'summary' | 'payment'>('bends');
     const [bends, setBends] = useState<Bend[]>([]);
 
+    // Quotes listing
+    const [myQuotes, setMyQuotes] = useState<any[]>([]);
+    const [showMyQuotes, setShowMyQuotes] = useState(true);
+    const [clientName, setClientName] = useState('');
+    const [pixKeys, setPixKeys] = useState<any[]>([]);
+    const [savingDraft, setSavingDraft] = useState(false);
+
     // Current bend
     const [currentRisks, setCurrentRisks] = useState<Risk[]>([]);
     const [pendingDir, setPendingDir] = useState<RiskDirection | null>(null);
@@ -108,9 +124,19 @@ export default function Orcamento() {
     useEffect(() => {
         fetch('/api/auth/check', { credentials: 'include' })
             .then(r => r.json())
-            .then(d => { if (!d.authenticated) navigate('/login'); else setUser(d); })
+            .then(d => {
+                if (!d.authenticated) navigate('/login');
+                else {
+                    setUser(d);
+                    localStorage.setItem('user', JSON.stringify(d));
+                    // Fetch user's quotes
+                    fetch('/api/quotes', { credentials: 'include' })
+                        .then(r => r.json()).then(setMyQuotes).catch(() => { });
+                }
+            })
             .catch(() => navigate('/login'));
         fetch('/api/settings').then(r => r.json()).then(setSettings).catch(() => { });
+        fetch('/api/pix-keys').then(r => r.json()).then(setPixKeys).catch(() => { });
     }, []);
 
     const curWidth = sumRisks(currentRisks);
@@ -124,13 +150,13 @@ export default function Orcamento() {
         return OPPOSITE_DIRECTION[dir] === last.direction && size === last.sizeCm;
     };
 
-    const saveToBendLibrary = (risks: Risk[], roundedWidthCm: number) => {
+    const saveToBendLibrary = (risks: Risk[], roundedWidthCm: number, svgDataUrl?: string) => {
         setBendLibrary(prev => {
             const key = JSON.stringify(risks);
             const exists = prev.find(b => JSON.stringify(b.risks) === key);
             const updated = exists
-                ? prev.map(b => JSON.stringify(b.risks) === key ? { ...b, useCount: b.useCount + 1 } : b)
-                : [{ risks, roundedWidthCm, useCount: 1 }, ...prev].slice(0, 20);
+                ? prev.map(b => JSON.stringify(b.risks) === key ? { ...b, useCount: b.useCount + 1, svgDataUrl: svgDataUrl || b.svgDataUrl } : b)
+                : [{ risks, roundedWidthCm, useCount: 1, svgDataUrl }, ...prev].slice(0, 20);
             localStorage.setItem('bendLibrary', JSON.stringify(updated));
             return updated;
         });
@@ -179,7 +205,7 @@ export default function Orcamento() {
         if (svgRef.current) svgDataUrl = await captureSvg(svgRef.current);
         const newBend: Bend = { id: uid(), risks: [...currentRisks], totalWidthCm: curWidth, roundedWidthCm: curRounded, lengths: [''], totalLengthM: 0, m2: 0, svgDataUrl };
         setBends(prev => [...prev, newBend]);
-        saveToBendLibrary([...currentRisks], curRounded);
+        saveToBendLibrary([...currentRisks], curRounded, svgDataUrl);
         setCurrentRisks([]);
         setPendingDir(null);
         setPendingSize('');
@@ -207,12 +233,12 @@ export default function Orcamento() {
                 headers: { 'Content-Type': 'application/json' },
                 credentials: 'include',
                 body: JSON.stringify({
-                    clientName: user?.name || user?.username,
+                    clientName: clientName || user?.name || user?.username,
                     notes,
                     bends: bends.map(b => ({
                         risks: b.risks, totalWidthCm: b.totalWidthCm, roundedWidthCm: b.roundedWidthCm,
                         lengths: b.lengths.filter(l => parseFloat(l) > 0).map(Number),
-                        totalLengthM: b.totalLengthM, m2: b.m2,
+                        totalLengthM: b.totalLengthM, m2: b.m2, svgDataUrl: b.svgDataUrl,
                     })),
                 }),
             });
@@ -230,6 +256,45 @@ export default function Orcamento() {
         } finally {
             setSubmitting(false);
         }
+    };
+
+    const handleSaveDraft = async () => {
+        if (!bends.length) { setToast({ msg: 'Adicione pelo menos uma dobra', type: 'error' }); return; }
+        setSavingDraft(true);
+        try {
+            const res = await fetch('/api/quotes', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                credentials: 'include',
+                body: JSON.stringify({
+                    clientName: clientName || user?.name || user?.username,
+                    notes,
+                    status: 'rascunho',
+                    bends: bends.map(b => ({
+                        risks: b.risks, totalWidthCm: b.totalWidthCm, roundedWidthCm: b.roundedWidthCm,
+                        lengths: b.lengths.filter(l => parseFloat(l) > 0).map(Number),
+                        totalLengthM: b.totalLengthM, m2: b.m2, svgDataUrl: b.svgDataUrl,
+                    })),
+                }),
+            });
+            if (res.ok) {
+                setToast({ msg: 'Rascunho salvo! Continue depois.', type: 'success' });
+                fetch('/api/quotes', { credentials: 'include' }).then(r => r.json()).then(setMyQuotes).catch(() => { });
+            } else setToast({ msg: 'Erro ao salvar rascunho', type: 'error' });
+        } catch { setToast({ msg: 'Erro ao salvar rascunho', type: 'error' }); }
+        finally { setSavingDraft(false); }
+    };
+
+    const handleCancelQuote = async (id: number) => {
+        if (!confirm('Deseja cancelar este orçamento?')) return;
+        const res = await fetch(`/api/quotes/${id}/status`, {
+            method: 'PUT', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ status: 'cancelled' }), credentials: 'include',
+        });
+        if (res.ok) {
+            setToast({ msg: 'Orçamento cancelado', type: 'success' });
+            fetch('/api/quotes', { credentials: 'include' }).then(r => r.json()).then(setMyQuotes).catch(() => { });
+        } else setToast({ msg: 'Erro ao cancelar', type: 'error' });
     };
 
     const handleUploadProof = async () => {
@@ -333,9 +398,61 @@ ${imgRows}
                     ))}
                 </div>
 
+                {/* ══ MY QUOTES LISTING ══ */}
+                {showMyQuotes && step === 'bends' && myQuotes.length > 0 && bends.length === 0 && (
+                    <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}
+                        className="bg-white/5 border border-white/10 rounded-3xl p-6 space-y-4">
+                        <div className="flex items-center justify-between">
+                            <h2 className="text-xl font-bold text-white flex items-center gap-2"><List className="w-5 h-5" /> Meus Orçamentos</h2>
+                            <button onClick={() => setShowMyQuotes(false)}
+                                className="px-4 py-2 bg-blue-500 hover:bg-blue-400 text-white font-bold rounded-xl flex items-center gap-2 text-sm cursor-pointer">
+                                <Plus className="w-4 h-4" /> Novo Orçamento
+                            </button>
+                        </div>
+                        <div className="space-y-2">
+                            {myQuotes.map(q => {
+                                const st = STATUS_LABELS[q.status] || STATUS_LABELS.pending;
+                                return (
+                                    <div key={q.id} className="bg-white/5 border border-white/10 rounded-2xl p-4 flex items-center gap-4 flex-wrap">
+                                        <span className="text-white/40 font-black text-sm">#{q.id}</span>
+                                        <div className="flex-1 min-w-0">
+                                            <p className="text-white font-bold">{q.clientName || 'Cliente'}</p>
+                                            <p className="text-slate-400 text-xs">{new Date(q.createdAt).toLocaleString('pt-BR')}{q.notes ? ` · ${q.notes.substring(0, 50)}` : ''}</p>
+                                        </div>
+                                        <span className={`text-xs font-bold px-3 py-1 rounded-full text-white ${st.color}`}>{st.label}</span>
+                                        <p className="text-white font-black">R$ {parseFloat(q.finalValue || q.totalValue || 0).toFixed(2)}</p>
+                                        {q.status !== 'paid' && q.status !== 'cancelled' && q.status !== 'finished' && (
+                                            <button onClick={() => handleCancelQuote(q.id)}
+                                                className="text-xs text-red-400 hover:text-red-300 font-bold px-2 py-1 border border-red-400/30 rounded-lg cursor-pointer">
+                                                Cancelar
+                                            </button>
+                                        )}
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    </motion.div>
+                )}
+
                 {/* ══ STEP 1: BENDS ══ */}
-                {step === 'bends' && (
+                {step === 'bends' && (!showMyQuotes || myQuotes.length === 0 || bends.length > 0) && (
                     <div className="space-y-6">
+                        {/* Client name input */}
+                        <div className="bg-white/5 border border-white/10 rounded-2xl p-4 flex flex-col sm:flex-row gap-3">
+                            <div className="flex-1">
+                                <label className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-1 block">Nome do Cliente (opcional)</label>
+                                <input type="text" value={clientName} onChange={e => setClientName(e.target.value)}
+                                    placeholder="Ex: João Silva"
+                                    className="w-full bg-white/10 border border-white/20 rounded-xl px-4 py-2.5 text-white placeholder-white/30 font-medium focus:outline-none focus:border-blue-400 transition-all" />
+                            </div>
+                            {myQuotes.length > 0 && (
+                                <button onClick={() => { setShowMyQuotes(true); setBends([]); setCurrentRisks([]); }}
+                                    className="self-end px-4 py-2.5 bg-white/10 hover:bg-white/20 text-white rounded-xl flex items-center gap-2 text-sm font-bold cursor-pointer">
+                                    <List className="w-4 h-4" /> Ver Meus Orçamentos
+                                </button>
+                            )}
+                        </div>
+
                         {/* Builder */}
                         <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}
                             className="bg-white/5 border border-white/10 rounded-3xl p-6 space-y-5">
@@ -358,9 +475,13 @@ ${imgRows}
                                         <div className="flex flex-wrap gap-2">
                                             {bendLibrary.slice(0, 8).map((b, i) => (
                                                 <button key={i} onClick={() => { setCurrentRisks(b.risks); setShowLibrary(false); }}
-                                                    className="text-xs px-3 py-2 bg-white/10 hover:bg-white/20 text-white rounded-xl transition-all cursor-pointer border border-white/10">
-                                                    {b.risks.map(r => `${DIRECTION_ICONS[r.direction]}${r.sizeCm}`).join(' ')} = <span className="text-blue-400 font-bold">{b.roundedWidthCm}cm</span>
-                                                    {b.useCount > 1 && <span className="ml-1 text-white/40">×{b.useCount}</span>}
+                                                    className="flex items-center gap-2 text-xs px-3 py-2 bg-white/10 hover:bg-white/20 text-white rounded-xl transition-all cursor-pointer border border-white/10">
+                                                    {b.svgDataUrl && <img src={b.svgDataUrl} alt="" className="w-10 h-8 rounded object-contain" style={{ background: '#1e293b' }} />}
+                                                    <div className="text-left">
+                                                        <span>{b.risks.map(r => `${DIRECTION_ICONS[r.direction]}${r.sizeCm}`).join(' ')}</span>
+                                                        <span className="text-blue-400 font-bold ml-1">{b.roundedWidthCm}cm</span>
+                                                        {b.useCount > 1 && <span className="ml-1 text-white/40">×{b.useCount}</span>}
+                                                    </div>
                                                 </button>
                                             ))}
                                         </div>
@@ -569,9 +690,15 @@ ${imgRows}
                                     <div><p className="text-slate-400 text-xs">Total m²</p><p className="text-white font-black text-xl">{totalM2.toFixed(4)} m²</p></div>
                                     <div className="border-l border-white/10 pl-6"><p className="text-slate-400 text-xs">Valor Estimado</p><p className="text-green-400 font-black text-2xl">R$ {totalValue.toFixed(2)}</p></div>
                                 </div>
-                                <button onClick={() => setStep('summary')} className="px-6 py-3 bg-blue-500 hover:bg-blue-400 text-white font-bold rounded-2xl flex items-center gap-2 transition-all cursor-pointer">
-                                    Ver Resumo <ChevronRight className="w-5 h-5" />
-                                </button>
+                                <div className="flex gap-3 flex-wrap">
+                                    <button onClick={handleSaveDraft} disabled={savingDraft}
+                                        className="px-5 py-3 bg-white/10 hover:bg-white/20 text-white rounded-2xl flex items-center gap-2 font-bold cursor-pointer disabled:opacity-50">
+                                        <Save className="w-4 h-4" /> Salvar Rascunho
+                                    </button>
+                                    <button onClick={() => setStep('summary')} className="px-6 py-3 bg-blue-500 hover:bg-blue-400 text-white font-bold rounded-2xl flex items-center gap-2 transition-all cursor-pointer">
+                                        Ver Resumo <ChevronRight className="w-5 h-5" />
+                                    </button>
+                                </div>
                             </div>
                         )}
                     </div>
@@ -624,7 +751,7 @@ ${imgRows}
 
                             <div>
                                 <label className="block text-sm font-bold text-slate-300 mb-2">Observações (opcional)</label>
-                                <textarea rows={3} value={notes} onChange={e => setNotes(e.target.value)} placeholder="Ex: Cor, material, urgência..."
+                                <textarea rows={3} value={notes} onChange={e => setNotes(e.target.value)} placeholder="Ex: endereço da obra, referência do local, cor, material, urgência..."
                                     className="w-full bg-white/10 border border-white/20 rounded-2xl px-5 py-3 text-white placeholder-white/30 focus:outline-none focus:border-blue-400 transition-all" />
                             </div>
                         </div>
@@ -653,34 +780,56 @@ ${imgRows}
                         </div>
                         <div className="bg-white/5 border border-white/10 rounded-3xl p-8 space-y-6">
                             <h3 className="text-xl font-bold text-white">💳 Pagamento via PIX</h3>
-                            <div className="grid sm:grid-cols-2 gap-6">
-                                <div className="space-y-4">
-                                    <div className="bg-white/5 rounded-2xl p-5">
-                                        <p className="text-slate-400 text-xs uppercase tracking-wider mb-1">Valor a Pagar</p>
-                                        <p className="text-4xl font-black text-green-400">R$ {parseFloat(savedQuote.finalValue || savedQuote.totalValue || 0).toFixed(2)}</p>
-                                    </div>
-                                    {settings.pixKey ? (
-                                        <div className="bg-white/5 rounded-2xl p-5">
-                                            <p className="text-slate-400 text-xs uppercase tracking-wider mb-2">Chave PIX</p>
-                                            <div className="flex items-center gap-3">
-                                                <code className="text-white font-bold flex-1 break-all text-sm">{settings.pixKey}</code>
-                                                <button onClick={() => navigator.clipboard.writeText(settings.pixKey).then(() => setToast({ msg: 'Chave PIX copiada!', type: 'success' }))}
-                                                    className="p-2 bg-blue-500 hover:bg-blue-400 text-white rounded-xl cursor-pointer"><Copy className="w-4 h-4" /></button>
-                                            </div>
-                                        </div>
-                                    ) : (
-                                        <div className="bg-yellow-500/10 border border-yellow-500/30 rounded-2xl p-4 text-yellow-300 text-sm">⚠ Chave PIX não configurada. Entre em contato via WhatsApp.</div>
-                                    )}
-                                </div>
-                                {settings.pixQrCodeUrl && (
-                                    <div className="flex items-center justify-center">
-                                        <div className="bg-white p-4 rounded-2xl">
-                                            <img src={settings.pixQrCodeUrl} alt="QR Code PIX" className="w-40 h-40 object-contain" />
-                                            <p className="text-center text-slate-700 text-xs mt-2 font-bold">Escaneie para pagar</p>
-                                        </div>
-                                    </div>
-                                )}
+                            <div className="bg-white/5 rounded-2xl p-5">
+                                <p className="text-slate-400 text-xs uppercase tracking-wider mb-1">Valor a Pagar</p>
+                                <p className="text-4xl font-black text-green-400">R$ {parseFloat(savedQuote.finalValue || savedQuote.totalValue || 0).toFixed(2)}</p>
                             </div>
+                            {pixKeys.length > 0 ? (
+                                <div className="space-y-4">
+                                    {pixKeys.map(pk => (
+                                        <div key={pk.id} className="bg-white/5 border border-white/10 rounded-2xl p-5 space-y-3">
+                                            <p className="text-white font-bold">{pk.label || 'Chave PIX'}</p>
+                                            <div className="flex items-center gap-3">
+                                                <code className="text-white font-bold flex-1 break-all text-sm bg-white/10 p-2 rounded-lg">{pk.pixKey}</code>
+                                                <button onClick={() => navigator.clipboard.writeText(pk.pixKey).then(() => setToast({ msg: 'Chave PIX copiada!', type: 'success' }))}
+                                                    className="px-4 py-2 bg-blue-500 hover:bg-blue-400 text-white rounded-xl cursor-pointer flex items-center gap-2 text-sm font-bold">
+                                                    <Copy className="w-4 h-4" /> Copiar
+                                                </button>
+                                            </div>
+                                            {pk.pixCode && (
+                                                <div className="flex items-center gap-3">
+                                                    <code className="text-white/60 text-xs flex-1 break-all bg-white/5 p-2 rounded-lg">{pk.pixCode.substring(0, 60)}...</code>
+                                                    <button onClick={() => navigator.clipboard.writeText(pk.pixCode).then(() => setToast({ msg: 'Código copia-cola copiado!', type: 'success' }))}
+                                                        className="px-3 py-1.5 bg-white/10 hover:bg-white/20 text-white rounded-lg text-xs font-bold cursor-pointer flex items-center gap-1">
+                                                        <Copy className="w-3 h-3" /> Código
+                                                    </button>
+                                                </div>
+                                            )}
+                                            {pk.qrCodeUrl && (
+                                                <div className="flex justify-center">
+                                                    <div className="bg-white p-3 rounded-xl">
+                                                        <img src={pk.qrCodeUrl} alt="QR Code" className="w-36 h-36 object-contain" />
+                                                        <p className="text-center text-slate-700 text-xs mt-1 font-bold">Escaneie para pagar</p>
+                                                    </div>
+                                                </div>
+                                            )}
+                                        </div>
+                                    ))}
+                                </div>
+                            ) : settings.pixKey ? (
+                                <div className="bg-white/5 rounded-2xl p-5">
+                                    <p className="text-slate-400 text-xs uppercase tracking-wider mb-2">Chave PIX</p>
+                                    <div className="flex items-center gap-3">
+                                        <code className="text-white font-bold flex-1 break-all text-sm">{settings.pixKey}</code>
+                                        <button onClick={() => navigator.clipboard.writeText(settings.pixKey).then(() => setToast({ msg: 'Chave PIX copiada!', type: 'success' }))}
+                                            className="px-4 py-2 bg-blue-500 hover:bg-blue-400 text-white rounded-xl cursor-pointer flex items-center gap-2 text-sm font-bold">
+                                            <Copy className="w-4 h-4" /> Copiar
+                                        </button>
+                                    </div>
+                                </div>
+                            ) : (
+                                <div className="bg-yellow-500/10 border border-yellow-500/30 rounded-2xl p-4 text-yellow-300 text-sm">⚠ Chave PIX não configurada. Entre em contato via WhatsApp.</div>
+                            )}
                             <div className="border-t border-white/10 pt-6">
                                 <h4 className="font-bold text-white mb-3">📎 Enviar Comprovante</h4>
                                 <div className="flex gap-3 flex-wrap">
