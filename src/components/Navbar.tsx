@@ -18,7 +18,7 @@ export default function Navbar() {
   useEffect(() => {
     const handleScroll = () => setScrolled(window.scrollY > 20);
     window.addEventListener('scroll', handleScroll);
-    
+
     fetch('/api/settings')
       .then(res => res.json())
       .then(setSettings)
@@ -32,6 +32,7 @@ export default function Navbar() {
     { name: 'Serviços', path: '/servicos' },
     { name: 'Galeria', path: '/galeria' },
     { name: 'Blog', path: '/blog' },
+    { name: '📐 Orçamento', path: '/orcamento' },
   ];
 
   const isScrolledOrNotHome = scrolled || !isHome;
@@ -91,8 +92,8 @@ export default function Navbar() {
               to="/login"
               className={cn(
                 "text-[10px] uppercase tracking-widest font-black transition-colors border rounded-md px-2 py-1",
-                isScrolledOrNotHome 
-                  ? "text-slate-400 border-slate-200 hover:text-brand-primary hover:border-brand-primary" 
+                isScrolledOrNotHome
+                  ? "text-slate-400 border-slate-200 hover:text-brand-primary hover:border-brand-primary"
                   : "text-white/60 border-white/20 hover:text-white hover:border-white"
               )}
             >

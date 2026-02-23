@@ -8,11 +8,13 @@ import Blog from './pages/Blog';
 import Gallery from './pages/Gallery';
 import Admin from './pages/Admin';
 import Login from './pages/Login';
+import Orcamento from './pages/Orcamento';
 
 function AppContent() {
   const location = useLocation();
   const isLoginPage = location.pathname === '/login';
   const isAdminPage = location.pathname === '/admin';
+  const isOrcamentoPage = location.pathname === '/orcamento';
 
   return (
     <div className="min-h-screen flex flex-col bg-slate-50 font-sans text-slate-900">
@@ -25,10 +27,11 @@ function AppContent() {
           <Route path="/galeria" element={<Gallery />} />
           <Route path="/admin" element={<Admin />} />
           <Route path="/login" element={<Login />} />
+          <Route path="/orcamento" element={<Orcamento />} />
         </Routes>
       </main>
-      {!isLoginPage && !isAdminPage && <Footer />}
-      {!isLoginPage && !isAdminPage && <WhatsAppButton />}
+      {!isLoginPage && !isAdminPage && !isOrcamentoPage && <Footer />}
+      {!isLoginPage && !isAdminPage && !isOrcamentoPage && <WhatsAppButton />}
     </div>
   );
 }
