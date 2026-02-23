@@ -1,64 +1,52 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'motion/react';
 import {
     Plus, Trash2, ChevronRight, ChevronLeft, Check, AlertTriangle,
-    Download, Printer, Copy, Send, RefreshCw, Undo2, Eye, FileDown
+    Printer, Copy, Send, RefreshCw, Undo2, FileDown, ZoomIn, X, PenLine
 } from 'lucide-react';
-import BendCanvas, { Risk, RiskDirection, DIRECTION_LABELS, DIRECTION_ICONS } from '../components/BendCanvas';
+import BendCanvas, {
+    Risk, RiskDirection, DIRECTION_LABELS, DIRECTION_ICONS, OPPOSITE_DIRECTION
+} from '../components/BendCanvas';
 
-// ─────────────────── Regra de Arredondamento (do prompt) ──────────────────
-// Regra:
-//   - valor INTEIRO → arredondamento comercial para múltiplo de 5 mais próximo
-//     (metade vai para BAIXO: 22.5→20, 27.5→25)
-//   - valor com DECIMAL → sempre arredonda para CIMA até o próximo múltiplo de 5
-//
-// Tabela esperada:
-//   21    → 20   (inteiro, mais perto de 20)
-//   21.01 → 25   (decimal, sobe)
-//   23    → 25   (inteiro, mais perto de 25)
-//   26    → 25   (inteiro, mais perto de 25)
-//   26.01 → 30   (decimal, sobe)
-//   36    → 35   (inteiro, mais perto de 35)
-//   36.75 → 40   (decimal, sobe)
-//   11.05 → 15   (decimal, sobe)
+// ─── Rounding Rule ────────────────────────────────────────────────────────────
+// Integer → round to nearest multiple of 5 (commercial: 21→20, 23→25, 26→25)
+// Decimal  → always ceil to next multiple of 5 (21.01→25, 26.01→30)
 function roundToMultipleOf5(value: number): number {
     if (value <= 0) return 5;
-    const isWholeNumber = value === Math.floor(value);
-    if (isWholeNumber) {
-        // Arredondamento padrão para múltiplo de 5 mais próximo
+    if (value === Math.floor(value)) {
         return Math.round(value / 5) * 5 || 5;
-    } else {
-        // Se tem decimal: sempre sobe para o próximo múltiplo de 5
-        return Math.ceil(value / 5) * 5;
     }
+    return Math.ceil(value / 5) * 5;
 }
 
-// ─────────────────────────── Types ───────────────────────────────────────
+// ─── Types ────────────────────────────────────────────────────────────────────
 interface Bend {
     id: string;
     risks: Risk[];
     confirmed: boolean;
     totalWidthCm: number;
     roundedWidthCm: number;
-    lengths: string[];   // raw string inputs
+    lengths: string[];
     totalLengthM: number;
     m2: number;
+    svgDataUrl?: string; // captured image
 }
 
-const DIRECTIONS: { dir: RiskDirection; label: string; icon: string; color: string }[] = [
-    { dir: 'flat', label: '→ Plano', icon: '➡', color: 'from-blue-500 to-blue-600' },
-    { dir: 'right90', label: '↘ 90° Dir', icon: '↘', color: 'from-orange-500 to-orange-600' },
-    { dir: 'left90', label: '↙ 90° Esq', icon: '↙', color: 'from-purple-500 to-purple-600' },
-    { dir: 'right45', label: '↗ 45° Dir', icon: '↗', color: 'from-cyan-500 to-cyan-600' },
-    { dir: 'left45', label: '↖ 45° Esq', icon: '↖', color: 'from-green-500 to-green-600' },
-    { dir: 'up', label: '⬆ Cima', icon: '⬆', color: 'from-pink-500 to-pink-600' },
+// ─── 8-direction grid layout ──────────────────────────────────────────────────
+const DIRECTIONS: { dir: RiskDirection; icon: string; label: string; color: string }[] = [
+    { dir: 'upLeft', icon: '↖', label: 'Cima-Esq', color: 'from-violet-500 to-violet-600' },
+    { dir: 'up', icon: '↑', label: 'Cima', color: 'from-blue-500 to-blue-600' },
+    { dir: 'upRight', icon: '↗', label: 'Cima-Dir', color: 'from-cyan-500 to-cyan-600' },
+    { dir: 'left', icon: '←', label: 'Esquerda', color: 'from-orange-500 to-orange-600' },
+    { dir: 'right', icon: '→', label: 'Direita', color: 'from-green-500 to-green-600' },
+    { dir: 'downLeft', icon: '↙', label: 'Baixo-Esq', color: 'from-pink-500 to-pink-600' },
+    { dir: 'down', icon: '↓', label: 'Baixo', color: 'from-red-500 to-red-600' },
+    { dir: 'downRight', icon: '↘', label: 'Baixo-Dir', color: 'from-amber-500 to-amber-600' },
 ];
 
 const MAX_WIDTH_CM = 120;
-
-// ─────────────────────────── Helpers ─────────────────────────────────────
-function generateId() { return Math.random().toString(36).slice(2); }
+const generateId = () => Math.random().toString(36).slice(2);
 
 function totalRiskWidth(risks: Risk[]) {
     return risks.reduce((s, r) => s + (parseFloat(String(r.sizeCm)) || 0), 0);
@@ -67,11 +55,35 @@ function totalRiskWidth(risks: Risk[]) {
 function calcBendM2(roundedWidthCm: number, lengths: string[]): { totalLengthM: number; m2: number } {
     const vals = lengths.map(l => parseFloat(l)).filter(v => !isNaN(v) && v > 0);
     const totalLengthM = vals.reduce((a, b) => a + b, 0);
-    const m2 = (roundedWidthCm / 100) * totalLengthM;
-    return { totalLengthM, m2 };
+    return { totalLengthM, m2: (roundedWidthCm / 100) * totalLengthM };
 }
 
-// ─────────────────────────── Main component ───────────────────────────────
+// ─── Capture SVG as PNG data URL ──────────────────────────────────────────────
+async function captureSvg(svgEl: SVGSVGElement): Promise<string> {
+    return new Promise((resolve) => {
+        try {
+            const svgData = new XMLSerializer().serializeToString(svgEl);
+            const blob = new Blob([svgData], { type: 'image/svg+xml;charset=utf-8' });
+            const url = URL.createObjectURL(blob);
+            const img = new Image();
+            img.onload = () => {
+                const canvas = document.createElement('canvas');
+                canvas.width = 920;
+                canvas.height = 440;
+                const ctx = canvas.getContext('2d')!;
+                ctx.fillStyle = '#1e293b';
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+                ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+                URL.revokeObjectURL(url);
+                resolve(canvas.toDataURL('image/png'));
+            };
+            img.onerror = () => resolve('');
+            img.src = url;
+        } catch { resolve(''); }
+    });
+}
+
+// ─── Main component ───────────────────────────────────────────────────────────
 export default function Orcamento() {
     const navigate = useNavigate();
     const [user, setUser] = useState<any>(null);
@@ -84,15 +96,25 @@ export default function Orcamento() {
     const [pendingDirection, setPendingDirection] = useState<RiskDirection | null>(null);
     const [pendingSize, setPendingSize] = useState('');
     const [sizeError, setSizeError] = useState('');
+    const [editingRiskIdx, setEditingRiskIdx] = useState<number | null>(null);
+    const [editingSize, setEditingSize] = useState('');
 
-    // Payment / submission
+    // Post-confirm flow
+    const [showPostConfirm, setShowPostConfirm] = useState(false);
+
+    // Image zoom
+    const [zoomImg, setZoomImg] = useState<string | null>(null);
+
+    // Payment
     const [notes, setNotes] = useState('');
     const [submitting, setSubmitting] = useState(false);
     const [savedQuote, setSavedQuote] = useState<any>(null);
     const [proofFile, setProofFile] = useState<File | null>(null);
     const [uploadingProof, setUploadingProof] = useState(false);
     const [toast, setToast] = useState<{ msg: string; type: 'success' | 'error' } | null>(null);
-    const proofRef = useRef<HTMLInputElement>(null);
+
+    const svgRef = useRef<SVGSVGElement>(null);
+    const topRef = useRef<HTMLDivElement>(null);
 
     useEffect(() => {
         if (toast) { const t = setTimeout(() => setToast(null), 3500); return () => clearTimeout(t); }
@@ -107,16 +129,26 @@ export default function Orcamento() {
             .then(d => setSettings(d));
     }, []);
 
-    // ── Current risks width ──
     const currentWidth = totalRiskWidth(currentRisks);
     const currentRounded = roundToMultipleOf5(currentWidth);
     const isOverLimit = currentWidth > MAX_WIDTH_CM;
 
-    // ── Add a risk to current bend ──
+    // ── Anti-reversal check ───────────────────────────────────────────────────
+    const checkReversal = (dir: RiskDirection, size: number): boolean => {
+        if (currentRisks.length === 0) return false;
+        const last = currentRisks[currentRisks.length - 1];
+        return OPPOSITE_DIRECTION[dir] === last.direction && size === last.sizeCm;
+    };
+
+    // ── Add risk ──────────────────────────────────────────────────────────────
     const handleAddRisk = () => {
         const size = parseFloat(pendingSize);
         if (!pendingDirection) { setSizeError('Selecione a direção do risco'); return; }
         if (!size || size <= 0) { setSizeError('Informe um tamanho válido'); return; }
+        if (checkReversal(pendingDirection, size)) {
+            setSizeError('⚠ Este risco anula o anterior e não é permitido.');
+            return;
+        }
         if (currentWidth + size > MAX_WIDTH_CM) {
             setSizeError(`Soma excede ${MAX_WIDTH_CM} cm. Disponível: ${(MAX_WIDTH_CM - currentWidth).toFixed(1)} cm`);
             return;
@@ -129,29 +161,62 @@ export default function Orcamento() {
 
     const handleUndoRisk = () => setCurrentRisks(prev => prev.slice(0, -1));
 
-    // ── Confirm current bend ──
-    const handleConfirmBend = () => {
+    // ── Inline risk editing ───────────────────────────────────────────────────
+    const startEditRisk = (idx: number) => {
+        setEditingRiskIdx(idx);
+        setEditingSize(String(currentRisks[idx].sizeCm));
+    };
+
+    const commitEditRisk = (idx: number) => {
+        const size = parseFloat(editingSize);
+        if (!size || size <= 0) { setEditingRiskIdx(null); return; }
+        const newRisks = [...currentRisks];
+        newRisks[idx] = { ...newRisks[idx], sizeCm: size };
+        // Validate total
+        const newTotal = newRisks.reduce((s, r) => s + r.sizeCm, 0);
+        if (newTotal > MAX_WIDTH_CM) {
+            setSizeError(`Edição excede ${MAX_WIDTH_CM} cm. Total seria: ${newTotal.toFixed(1)} cm`);
+            setEditingRiskIdx(null);
+            return;
+        }
+        setCurrentRisks(newRisks);
+        setEditingRiskIdx(null);
+        setSizeError('');
+    };
+
+    // ── Confirm bend ──────────────────────────────────────────────────────────
+    const handleConfirmBend = async () => {
         if (currentRisks.length === 0) { setToast({ msg: 'Adicione pelo menos 1 risco', type: 'error' }); return; }
         if (isOverLimit) { setToast({ msg: 'Largura excede 1,20m!', type: 'error' }); return; }
-        const totalWidthCm = currentWidth;
-        const roundedWidthCm = currentRounded;
+
+        // Capture SVG image
+        let svgDataUrl = '';
+        if (svgRef.current) svgDataUrl = await captureSvg(svgRef.current);
+
         const newBend: Bend = {
             id: generateId(),
             risks: [...currentRisks],
             confirmed: true,
-            totalWidthCm,
-            roundedWidthCm,
+            totalWidthCm: currentWidth,
+            roundedWidthCm: currentRounded,
             lengths: [''],
             totalLengthM: 0,
             m2: 0,
+            svgDataUrl,
         };
         setBends(prev => [...prev, newBend]);
         setCurrentRisks([]);
         setPendingDirection(null);
         setPendingSize('');
+        setShowPostConfirm(true);
     };
 
-    // ── Update bend lengths ──
+    const handleStartNewBend = () => {
+        setShowPostConfirm(false);
+        topRef.current?.scrollIntoView({ behavior: 'smooth' });
+    };
+
+    // ── Update lengths ────────────────────────────────────────────────────────
     const updateBendLength = (bendId: string, idx: number, value: string) => {
         setBends(prev => prev.map(b => {
             if (b.id !== bendId) return b;
@@ -162,9 +227,8 @@ export default function Orcamento() {
         }));
     };
 
-    const addLength = (bendId: string) => {
+    const addLength = (bendId: string) =>
         setBends(prev => prev.map(b => b.id === bendId ? { ...b, lengths: [...b.lengths, ''] } : b));
-    };
 
     const removeLength = (bendId: string, idx: number) => {
         setBends(prev => prev.map(b => {
@@ -175,23 +239,22 @@ export default function Orcamento() {
         }));
     };
 
-    const deleteBend = (bendId: string) => {
-        setBends(prev => prev.filter(b => b.id !== bendId));
-    };
+    const deleteBend = (bendId: string) => setBends(prev => prev.filter(b => b.id !== bendId));
 
     const editBend = (bendId: string) => {
         const bend = bends.find(b => b.id === bendId);
         if (!bend) return;
         setCurrentRisks(bend.risks);
         setBends(prev => prev.filter(b => b.id !== bendId));
+        setShowPostConfirm(false);
     };
 
-    // ── Totals ──
+    // ── Totals ────────────────────────────────────────────────────────────────
     const totalM2 = bends.reduce((s, b) => s + b.m2, 0);
     const pricePerM2 = parseFloat(settings.pricePerM2 || '50');
     const totalValue = totalM2 * pricePerM2;
 
-    // ── Submit quote ──
+    // ── Submit quote ──────────────────────────────────────────────────────────
     const handleSubmit = async () => {
         if (bends.length === 0) { setToast({ msg: 'Adicione pelo menos uma dobra', type: 'error' }); return; }
         const hasAllLengths = bends.every(b => b.lengths.some(l => parseFloat(l) > 0));
@@ -216,7 +279,7 @@ export default function Orcamento() {
                 body: JSON.stringify(payload),
                 credentials: 'include',
             });
-            if (!res.ok) throw new Error(await res.text());
+            if (!res.ok) throw new Error((await res.json()).error || await res.text());
             const quote = await res.json();
             setSavedQuote(quote);
             setStep('payment');
@@ -235,13 +298,13 @@ export default function Orcamento() {
                 window.open(`https://wa.me/${phone}?text=${msg}`, '_blank');
             }
         } catch (err: any) {
-            setToast({ msg: err.message || 'Erro ao salvar orçamento', type: 'error' });
+            setToast({ msg: err.message || 'Erro ao salvar orçamento. Tente novamente.', type: 'error' });
         } finally {
             setSubmitting(false);
         }
     };
 
-    // ── Upload comprovante ──
+    // ── Upload proof ──────────────────────────────────────────────────────────
     const handleUploadProof = async () => {
         if (!proofFile || !savedQuote) return;
         setUploadingProof(true);
@@ -257,10 +320,9 @@ export default function Orcamento() {
         setUploadingProof(false);
     };
 
-    // ── Print ──
+    // ── Print / PDF ───────────────────────────────────────────────────────────
     const handlePrint = () => window.print();
 
-    // ── PDF Download ──
     const handleDownloadPDF = () => {
         const rows = bends.map((b, i) => `
             <tr>
@@ -272,30 +334,32 @@ export default function Orcamento() {
                 <td>R$ ${(b.m2 * pricePerM2).toFixed(2)}</td>
             </tr>
         `).join('');
+        const imgRows = bends.map((b, i) =>
+            b.svgDataUrl ? `<div style="margin:16px 0"><p style="font-weight:bold">Dobra #${i + 1}</p><img src="${b.svgDataUrl}" style="width:100%;max-height:200px;object-fit:contain;background:#1e293b;border-radius:8px"/></div>` : ''
+        ).join('');
         const html = `<!DOCTYPE html><html lang="pt-BR"><head>
             <meta charset="UTF-8"><title>Orçamento Ferreira Calhas</title>
             <style>
-                body{font-family:Arial,sans-serif;padding:32px;color:#111;max-width:800px;margin:auto}
-                h1{font-size:22px;margin-bottom:4px}h2{font-size:14px;color:#555;font-weight:normal;margin:0}
-                table{width:100%;border-collapse:collapse;margin-top:24px;font-size:13px}
-                th{background:#1e293b;color:#fff;text-align:left;padding:10px 8px}
-                td{padding:9px 8px;border-bottom:1px solid #e8e8e8}
+                body{font-family:Arial,sans-serif;padding:32px;color:#111;max-width:900px;margin:auto}
+                h1{font-size:22px;margin-bottom:4px}
+                table{width:100%;border-collapse:collapse;margin-top:16px;font-size:12px}
+                th{background:#1e293b;color:#fff;text-align:left;padding:9px 8px}
+                td{padding:8px;border-bottom:1px solid #e8e8e8}
                 tr:nth-child(even) td{background:#f8fafc}
-                .total-row td{border-top:2px solid #1e293b;font-weight:bold;font-size:15px}
-                .value{font-size:28px;font-weight:900;color:#16a34a;margin-top:16px}
-                .meta{margin-top:8px;font-size:12px;color:#777}
+                .total-row td{border-top:2px solid #1e293b;font-weight:bold}
                 @media print{body{padding:16px}}
             </style></head><body>
             <h1>Orçamento — Ferreira Calhas</h1>
-            <h2>${new Date().toLocaleDateString('pt-BR', { day: '2-digit', month: 'long', year: 'numeric' })}</h2>
-            <p class="meta">Cliente: <strong>${user?.name || user?.username || ''}</strong>${notes ? ' &nbsp;|&nbsp; Obs: ' + notes : ''}</p>
+            <p style="color:#555;font-size:13px">${new Date().toLocaleDateString('pt-BR', { day: '2-digit', month: 'long', year: 'numeric' })}</p>
+            <p style="font-size:12px">Cliente: <strong>${user?.name || user?.username || ''}</strong>${notes ? ' | Obs: ' + notes : ''}</p>
+            ${imgRows}
             <table>
                 <thead><tr><th>#</th><th>Riscos</th><th>Largura</th><th>Metros corridos</th><th>m²</th><th>Valor</th></tr></thead>
                 <tbody>${rows}</tbody>
                 <tfoot>
                     <tr><td colspan="4" style="text-align:right;padding-top:16px">Total m²:</td><td colspan="2"><strong>${totalM2.toFixed(4)} m²</strong></td></tr>
                     <tr><td colspan="4" style="text-align:right">Valor por m²:</td><td colspan="2">R$ ${pricePerM2.toFixed(2)}</td></tr>
-                    <tr class="total-row"><td colspan="4" style="text-align:right">TOTAL A PAGAR:</td><td colspan="2" style="color:#16a34a;font-size:18px">R$ ${totalValue.toFixed(2)}</td></tr>
+                    <tr class="total-row"><td colspan="4" style="text-align:right">TOTAL A PAGAR:</td><td colspan="2" style="color:#16a34a;font-size:16px">R$ ${totalValue.toFixed(2)}</td></tr>
                 </tfoot>
             </table>
             <script>window.onload=()=>window.print();<\/script>
@@ -306,17 +370,29 @@ export default function Orcamento() {
         if (win) setTimeout(() => URL.revokeObjectURL(url), 10000);
     };
 
-    // ══════════════════════════════ RENDER ══════════════════════════════════
+    // ════════════════════════════ RENDER ════════════════════════════════════
     return (
-        <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 pt-24 pb-16 px-4">
+        <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 pt-24 pb-16 px-4" ref={topRef}>
             {/* Toast */}
             <AnimatePresence>
                 {toast && (
-                    <motion.div
-                        initial={{ opacity: 0, y: -20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -20 }}
-                        className={`fixed top-6 right-6 z-[9999] px-6 py-3 rounded-2xl text-white font-bold shadow-xl ${toast.type === 'success' ? 'bg-green-500' : 'bg-red-500'}`}
-                    >
+                    <motion.div initial={{ opacity: 0, y: -20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -20 }}
+                        className={`fixed top-6 right-6 z-[9999] px-6 py-3 rounded-2xl text-white font-bold shadow-xl ${toast.type === 'success' ? 'bg-green-500' : 'bg-red-500'}`}>
                         {toast.msg}
+                    </motion.div>
+                )}
+            </AnimatePresence>
+
+            {/* Image zoom modal */}
+            <AnimatePresence>
+                {zoomImg && (
+                    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+                        className="fixed inset-0 z-[9998] bg-black/80 flex items-center justify-center p-4"
+                        onClick={() => setZoomImg(null)}>
+                        <button className="absolute top-4 right-4 text-white p-2 bg-white/10 rounded-full cursor-pointer">
+                            <X className="w-6 h-6" />
+                        </button>
+                        <img src={zoomImg} alt="Dobra em zoom" className="max-w-full max-h-full rounded-2xl" onClick={e => e.stopPropagation()} />
                     </motion.div>
                 )}
             </AnimatePresence>
@@ -330,21 +406,17 @@ export default function Orcamento() {
 
                 {/* Step Indicator */}
                 <div className="flex items-center justify-center gap-4 mb-8">
-                    {[
-                        { id: 'bends', label: '1. Dobras' },
-                        { id: 'summary', label: '2. Resumo' },
-                        { id: 'payment', label: '3. Pagamento' },
-                    ].map((s, i) => (
+                    {[{ id: 'bends', label: '1. Dobras' }, { id: 'summary', label: '2. Resumo' }, { id: 'payment', label: '3. Pagamento' }].map((s, i) => (
                         <React.Fragment key={s.id}>
                             <div className={`flex items-center gap-2 px-4 py-2 rounded-full text-sm font-bold transition-all ${step === s.id ? 'bg-blue-500 text-white' : 'bg-white/10 text-white/50'}`}>
-                                <span>{s.label}</span>
+                                {s.label}
                             </div>
                             {i < 2 && <ChevronRight className="w-4 h-4 text-white/30" />}
                         </React.Fragment>
                     ))}
                 </div>
 
-                {/* ═══════════════ STEP 1: BENDS ═══════════════ */}
+                {/* ══════════ STEP 1: BENDS ══════════ */}
                 {step === 'bends' && (
                     <div className="space-y-6">
                         {/* Current bend builder */}
@@ -355,11 +427,11 @@ export default function Orcamento() {
                                 Construindo Dobra #{bends.length + 1}
                             </h2>
 
-                            {/* Canvas */}
-                            <BendCanvas risks={currentRisks} />
+                            {/* Canvas with SVG ref */}
+                            <BendCanvas risks={currentRisks} svgRef={svgRef} />
 
                             {/* Width info */}
-                            <div className="flex items-center gap-4 text-sm">
+                            <div className="flex items-center gap-4 text-sm flex-wrap">
                                 <div className={`px-4 py-2 rounded-xl font-bold ${isOverLimit ? 'bg-red-500/20 text-red-400 border border-red-500/30' : 'bg-white/10 text-white'}`}>
                                     Soma: <strong>{currentWidth.toFixed(1)} cm</strong>
                                 </div>
@@ -370,69 +442,110 @@ export default function Orcamento() {
                                 )}
                                 {isOverLimit && (
                                     <div className="flex items-center gap-2 text-red-400 font-bold">
-                                        <AlertTriangle className="w-4 h-4" />
-                                        Excede 120 cm!
+                                        <AlertTriangle className="w-4 h-4" /> Excede 120 cm!
                                     </div>
                                 )}
                             </div>
 
-                            {/* Step 1: Direction selection */}
+                            {/* Step 1: 8-direction selector (grid 4+4) */}
                             <div>
-                                <p className="text-sm font-bold text-slate-300 mb-3 uppercase tracking-wider">Passo 1 — Escolha a direção do risco</p>
-                                <div className="grid grid-cols-3 sm:grid-cols-6 gap-2">
-                                    {DIRECTIONS.map(d => (
-                                        <button
-                                            key={d.dir}
-                                            onClick={() => setPendingDirection(d.dir)}
+                                <p className="text-sm font-bold text-slate-300 mb-3 uppercase tracking-wider">Passo 1 — Direção do risco</p>
+                                <div className="grid grid-cols-4 gap-2">
+                                    {DIRECTIONS.slice(0, 3).map(d => (
+                                        <button key={d.dir} onClick={() => setPendingDirection(d.dir)}
                                             className={`flex flex-col items-center gap-1 p-3 rounded-2xl border-2 font-bold text-xs transition-all cursor-pointer
-                        ${pendingDirection === d.dir
+                                                ${pendingDirection === d.dir
                                                     ? `bg-gradient-to-br ${d.color} border-transparent text-white shadow-lg scale-105`
-                                                    : 'border-white/10 text-white/60 hover:border-white/30 hover:text-white'
-                                                }`}
-                                        >
-                                            <span className="text-2xl">{d.icon}</span>
-                                            <span className="text-center leading-tight">{d.label}</span>
+                                                    : 'border-white/10 text-white/60 hover:border-white/30 hover:text-white'}`}>
+                                            <span className="text-3xl leading-none">{d.icon}</span>
+                                            <span className="text-center leading-tight mt-1">{d.label}</span>
                                         </button>
                                     ))}
+                                    {/* Empty center */}
+                                    <div className="rounded-2xl border-2 border-white/5 flex items-center justify-center">
+                                        <span className="text-white/20 text-xs text-center">calha</span>
+                                    </div>
+                                    {/* Row 2: left, right in cols 1,3 */}
+                                    <button onClick={() => setPendingDirection('left')}
+                                        className={`flex flex-col items-center gap-1 p-3 rounded-2xl border-2 font-bold text-xs transition-all cursor-pointer
+                                            ${pendingDirection === 'left'
+                                                ? `bg-gradient-to-br ${DIRECTIONS.find(d => d.dir === 'left')!.color} border-transparent text-white shadow-lg scale-105`
+                                                : 'border-white/10 text-white/60 hover:border-white/30 hover:text-white'}`}>
+                                        <span className="text-3xl leading-none">←</span>
+                                        <span className="leading-tight mt-1">Esquerda</span>
+                                    </button>
+                                    {/* Center spacer */}
+                                    <div />
+                                    <button onClick={() => setPendingDirection('right')}
+                                        className={`flex flex-col items-center gap-1 p-3 rounded-2xl border-2 font-bold text-xs transition-all cursor-pointer
+                                            ${pendingDirection === 'right'
+                                                ? `bg-gradient-to-br ${DIRECTIONS.find(d => d.dir === 'right')!.color} border-transparent text-white shadow-lg scale-105`
+                                                : 'border-white/10 text-white/60 hover:border-white/30 hover:text-white'}`}>
+                                        <span className="text-3xl leading-none">→</span>
+                                        <span className="leading-tight mt-1">Direita</span>
+                                    </button>
+                                    {/* Empty */}
+                                    <div />
+                                    {/* Row 3: down-left, down, down-right centered */}
+                                    {DIRECTIONS.slice(5, 8).map(d => (
+                                        <button key={d.dir} onClick={() => setPendingDirection(d.dir)}
+                                            className={`flex flex-col items-center gap-1 p-3 rounded-2xl border-2 font-bold text-xs transition-all cursor-pointer
+                                                ${pendingDirection === d.dir
+                                                    ? `bg-gradient-to-br ${d.color} border-transparent text-white shadow-lg scale-105`
+                                                    : 'border-white/10 text-white/60 hover:border-white/30 hover:text-white'}`}>
+                                            <span className="text-3xl leading-none">{d.icon}</span>
+                                            <span className="text-center leading-tight mt-1">{d.label}</span>
+                                        </button>
+                                    ))}
+                                    <div />
                                 </div>
                             </div>
 
-                            {/* Step 2: Size input */}
+                            {/* Step 2: Size */}
                             <div>
-                                <p className="text-sm font-bold text-slate-300 mb-3 uppercase tracking-wider">Passo 2 — Informe o tamanho (cm)</p>
+                                <p className="text-sm font-bold text-slate-300 mb-3 uppercase tracking-wider">Passo 2 — Tamanho (cm)</p>
                                 <div className="flex gap-3">
-                                    <input
-                                        type="number"
-                                        min="1"
-                                        max="120"
-                                        step="0.5"
-                                        placeholder="Ex: 15"
+                                    <input type="number" min="1" max="120" step="0.5" placeholder="Ex: 15"
                                         value={pendingSize}
                                         onChange={e => { setPendingSize(e.target.value); setSizeError(''); }}
                                         onKeyDown={e => e.key === 'Enter' && handleAddRisk()}
                                         disabled={!pendingDirection}
-                                        className="flex-1 bg-white/10 border border-white/20 rounded-2xl px-5 py-3 text-white placeholder-white/30 font-bold text-lg focus:outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-400/20 disabled:opacity-40 transition-all"
-                                    />
-                                    <button
-                                        onClick={handleAddRisk}
-                                        disabled={!pendingDirection || !pendingSize}
-                                        className="px-6 py-3 bg-blue-500 hover:bg-blue-400 disabled:opacity-40 text-white font-bold rounded-2xl transition-all flex items-center gap-2 cursor-pointer disabled:cursor-not-allowed"
-                                    >
-                                        <Plus className="w-5 h-5" /> Adicionar Risco
+                                        className="flex-1 bg-white/10 border border-white/20 rounded-2xl px-5 py-3 text-white placeholder-white/30 font-bold text-lg focus:outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-400/20 disabled:opacity-40 transition-all" />
+                                    <button onClick={handleAddRisk} disabled={!pendingDirection || !pendingSize}
+                                        className="px-6 py-3 bg-blue-500 hover:bg-blue-400 disabled:opacity-40 text-white font-bold rounded-2xl transition-all flex items-center gap-2 cursor-pointer disabled:cursor-not-allowed">
+                                        <Plus className="w-5 h-5" /> Adicionar
                                     </button>
                                 </div>
                                 {sizeError && <p className="text-red-400 text-sm mt-2 font-medium flex items-center gap-1"><AlertTriangle className="w-4 h-4" />{sizeError}</p>}
                             </div>
 
-                            {/* Risks list */}
+                            {/* Risks list — inline editable */}
                             {currentRisks.length > 0 && (
                                 <div>
-                                    <p className="text-xs text-slate-400 uppercase tracking-wider mb-2">Riscos adicionados:</p>
+                                    <p className="text-xs text-slate-400 uppercase tracking-wider mb-2">Riscos adicionados (clique no valor para editar):</p>
                                     <div className="flex flex-wrap gap-2">
                                         {currentRisks.map((r, i) => (
-                                            <span key={i} className="px-3 py-1.5 bg-white/10 rounded-xl text-white text-sm font-bold border border-white/20">
-                                                {DIRECTION_ICONS[r.direction]} {r.sizeCm} cm
-                                            </span>
+                                            <div key={i} className="flex items-center gap-1 px-3 py-1.5 bg-white/10 rounded-xl border border-white/20">
+                                                <span className="text-white text-sm">{DIRECTION_ICONS[r.direction]}</span>
+                                                {editingRiskIdx === i ? (
+                                                    <input type="number" autoFocus
+                                                        value={editingSize}
+                                                        onChange={e => setEditingSize(e.target.value)}
+                                                        onBlur={() => commitEditRisk(i)}
+                                                        onKeyDown={e => { if (e.key === 'Enter') commitEditRisk(i); if (e.key === 'Escape') setEditingRiskIdx(null); }}
+                                                        className="w-16 bg-white/20 text-white text-sm font-bold rounded px-2 py-0.5 outline-none border border-blue-400" />
+                                                ) : (
+                                                    <button onClick={() => startEditRisk(i)}
+                                                        className="text-white font-bold text-sm hover:text-blue-300 transition-colors cursor-pointer"
+                                                        title="Clique para editar">
+                                                        <PenLine className="w-3 h-3 inline mr-0.5 opacity-50" />{r.sizeCm}cm
+                                                    </button>
+                                                )}
+                                                <button onClick={() => setCurrentRisks(prev => prev.filter((_, idx) => idx !== i))}
+                                                    className="text-red-400/60 hover:text-red-400 transition-colors cursor-pointer ml-1">
+                                                    <X className="w-3 h-3" />
+                                                </button>
+                                            </div>
                                         ))}
                                     </div>
                                 </div>
@@ -446,119 +559,118 @@ export default function Orcamento() {
                                         <Undo2 className="w-4 h-4" /> Desfazer
                                     </button>
                                 )}
-                                <button
-                                    onClick={handleConfirmBend}
+                                <button onClick={handleConfirmBend}
                                     disabled={currentRisks.length === 0 || isOverLimit}
-                                    className="px-6 py-3 bg-green-500 hover:bg-green-400 disabled:opacity-40 disabled:cursor-not-allowed text-white font-bold rounded-2xl flex items-center gap-2 transition-all cursor-pointer ml-auto"
-                                >
+                                    className="px-6 py-3 bg-green-500 hover:bg-green-400 disabled:opacity-40 disabled:cursor-not-allowed text-white font-bold rounded-2xl flex items-center gap-2 transition-all cursor-pointer ml-auto">
                                     <Check className="w-5 h-5" /> Confirmar Dobra #{bends.length + 1}
                                 </button>
                             </div>
                         </motion.div>
+
+                        {/* Post-confirm choice */}
+                        <AnimatePresence>
+                            {showPostConfirm && (
+                                <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0 }}
+                                    className="bg-green-500/10 border border-green-500/30 rounded-3xl p-6 flex flex-col sm:flex-row items-center gap-4 justify-center">
+                                    <div className="w-12 h-12 bg-green-500 rounded-full flex items-center justify-center text-2xl flex-shrink-0">✓</div>
+                                    <div className="text-center sm:text-left">
+                                        <p className="text-white font-bold text-lg">Dobra #{bends.length} confirmada!</p>
+                                        <p className="text-slate-400 text-sm">O que deseja fazer agora?</p>
+                                    </div>
+                                    <div className="flex gap-3 flex-wrap justify-center sm:ml-auto">
+                                        <button onClick={handleStartNewBend}
+                                            className="px-5 py-2.5 bg-blue-500 hover:bg-blue-400 text-white font-bold rounded-2xl flex items-center gap-2 transition-all cursor-pointer">
+                                            <Plus className="w-4 h-4" /> Nova Dobra
+                                        </button>
+                                        <button onClick={() => { setShowPostConfirm(false); setStep('summary'); }}
+                                            className="px-5 py-2.5 bg-slate-700 hover:bg-slate-600 text-white font-bold rounded-2xl flex items-center gap-2 transition-all cursor-pointer">
+                                            📊 Ir para Resumo <ChevronRight className="w-4 h-4" />
+                                        </button>
+                                    </div>
+                                </motion.div>
+                            )}
+                        </AnimatePresence>
 
                         {/* Confirmed bends */}
                         {bends.length > 0 && (
                             <div className="space-y-4">
                                 <h3 className="text-white font-bold text-lg">Dobras Confirmadas ({bends.length})</h3>
                                 {bends.map((bend, bi) => (
-                                    <motion.div key={bend.id}
-                                        initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }}
+                                    <motion.div key={bend.id} initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }}
                                         className="bg-white/5 border border-white/10 rounded-3xl p-6 space-y-4">
-                                        {/* Bend header */}
                                         <div className="flex items-center justify-between">
                                             <div className="flex items-center gap-3">
-                                                <span className="w-8 h-8 bg-green-500 rounded-full flex items-center justify-center text-white font-black text-sm">
-                                                    {bi + 1}
-                                                </span>
+                                                <span className="w-8 h-8 bg-green-500 rounded-full flex items-center justify-center text-white font-black text-sm">{bi + 1}</span>
                                                 <div>
                                                     <p className="text-white font-bold">Dobra {bi + 1}</p>
                                                     <p className="text-slate-400 text-xs">
-                                                        {bend.risks.length} riscos · {bend.totalWidthCm.toFixed(1)} cm → arredondado: <strong className="text-blue-400">{bend.roundedWidthCm} cm</strong>
+                                                        {bend.risks.length} riscos · {bend.totalWidthCm.toFixed(1)} cm → <strong className="text-blue-400">{bend.roundedWidthCm} cm</strong>
                                                     </p>
                                                 </div>
                                             </div>
                                             <div className="flex gap-2">
-                                                <button onClick={() => editBend(bend.id)}
-                                                    className="p-2 text-yellow-400 hover:bg-yellow-400/10 rounded-xl transition-all cursor-pointer">
+                                                <button onClick={() => editBend(bend.id)} className="p-2 text-yellow-400 hover:bg-yellow-400/10 rounded-xl transition-all cursor-pointer" title="Editar">
                                                     <RefreshCw className="w-4 h-4" />
                                                 </button>
-                                                <button onClick={() => deleteBend(bend.id)}
-                                                    className="p-2 text-red-400 hover:bg-red-400/10 rounded-xl transition-all cursor-pointer">
+                                                <button onClick={() => deleteBend(bend.id)} className="p-2 text-red-400 hover:bg-red-400/10 rounded-xl transition-all cursor-pointer" title="Excluir">
                                                     <Trash2 className="w-4 h-4" />
                                                 </button>
                                             </div>
                                         </div>
 
-                                        {/* Mini canvas preview */}
-                                        <div className="opacity-60">
-                                            <BendCanvas risks={bend.risks} />
-                                        </div>
+                                        {/* Captured image preview */}
+                                        {bend.svgDataUrl && (
+                                            <div className="relative group cursor-pointer" onClick={() => setZoomImg(bend.svgDataUrl!)}>
+                                                <img src={bend.svgDataUrl} alt={`Dobra ${bi + 1}`} className="w-full rounded-xl opacity-80 group-hover:opacity-100 transition-opacity" style={{ maxHeight: 140, objectFit: 'contain', background: '#1e293b' }} />
+                                                <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
+                                                    <ZoomIn className="w-8 h-8 text-white drop-shadow-lg" />
+                                                </div>
+                                            </div>
+                                        )}
 
-                                        {/* Lengths section */}
+                                        {/* Lengths */}
                                         <div>
                                             <p className="text-sm font-bold text-slate-300 mb-2 uppercase tracking-wider">Metros Corridos</p>
                                             <div className="space-y-2">
                                                 {bend.lengths.map((l, li) => (
                                                     <div key={li} className="flex gap-2 items-center">
                                                         <span className="text-slate-500 text-xs w-5">{li + 1}.</span>
-                                                        <input
-                                                            type="number"
-                                                            min="0.01"
-                                                            step="0.01"
-                                                            placeholder="Ex: 3.50"
-                                                            value={l}
+                                                        <input type="number" min="0.01" step="0.01" placeholder="Ex: 3.50" value={l}
                                                             onChange={e => updateBendLength(bend.id, li, e.target.value)}
-                                                            className="flex-1 bg-white/10 border border-white/20 rounded-xl px-4 py-2 text-white placeholder-white/30 font-bold focus:outline-none focus:border-blue-400 transition-all"
-                                                        />
+                                                            className="flex-1 bg-white/10 border border-white/20 rounded-xl px-4 py-2 text-white placeholder-white/30 font-bold focus:outline-none focus:border-blue-400 transition-all" />
                                                         <span className="text-slate-400 text-sm">m</span>
                                                         {bend.lengths.length > 1 && (
-                                                            <button onClick={() => removeLength(bend.id, li)}
-                                                                className="p-1.5 text-red-400 hover:bg-red-400/10 rounded-lg transition-all cursor-pointer">
+                                                            <button onClick={() => removeLength(bend.id, li)} className="p-1.5 text-red-400 hover:bg-red-400/10 rounded-lg transition-all cursor-pointer">
                                                                 <Trash2 className="w-3.5 h-3.5" />
                                                             </button>
                                                         )}
                                                     </div>
                                                 ))}
                                             </div>
-                                            <button onClick={() => addLength(bend.id)}
-                                                className="mt-2 text-xs text-blue-400 hover:text-blue-300 font-bold flex items-center gap-1 cursor-pointer">
+                                            <button onClick={() => addLength(bend.id)} className="mt-2 text-xs text-blue-400 hover:text-blue-300 font-bold flex items-center gap-1 cursor-pointer">
                                                 <Plus className="w-3.5 h-3.5" /> Adicionar comprimento
                                             </button>
                                         </div>
 
                                         {/* m² result */}
-                                        <div className="flex gap-4 text-sm bg-white/5 rounded-2xl p-4">
-                                            <div>
-                                                <p className="text-slate-400 text-xs">Total metros corridos</p>
-                                                <p className="text-white font-bold">{bend.totalLengthM.toFixed(2)} m</p>
-                                            </div>
-                                            <div className="border-l border-white/10 pl-4">
-                                                <p className="text-slate-400 text-xs">Largura (arredondada)</p>
-                                                <p className="text-white font-bold">{(bend.roundedWidthCm / 100).toFixed(2)} m</p>
-                                            </div>
-                                            <div className="border-l border-white/10 pl-4">
-                                                <p className="text-slate-400 text-xs">Área (m²)</p>
-                                                <p className="text-blue-400 font-black text-lg">{bend.m2.toFixed(4)} m²</p>
-                                            </div>
+                                        <div className="flex gap-4 text-sm bg-white/5 rounded-2xl p-4 flex-wrap">
+                                            <div><p className="text-slate-400 text-xs">Total metros</p><p className="text-white font-bold">{bend.totalLengthM.toFixed(2)} m</p></div>
+                                            <div className="border-l border-white/10 pl-4"><p className="text-slate-400 text-xs">Largura</p><p className="text-white font-bold">{(bend.roundedWidthCm / 100).toFixed(2)} m</p></div>
+                                            <div className="border-l border-white/10 pl-4"><p className="text-slate-400 text-xs">Área (m²)</p><p className="text-blue-400 font-black text-lg">{bend.m2.toFixed(4)} m²</p></div>
+                                            <div className="border-l border-white/10 pl-4 ml-auto"><p className="text-slate-400 text-xs">Subtotal</p><p className="text-green-400 font-black">R$ {(bend.m2 * pricePerM2).toFixed(2)}</p></div>
                                         </div>
                                     </motion.div>
                                 ))}
                             </div>
                         )}
 
-                        {/* Total bar + Next button */}
-                        {bends.length > 0 && (
+                        {/* Total bar */}
+                        {bends.length > 0 && !showPostConfirm && (
                             <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}
                                 className="sticky bottom-4 bg-slate-900/90 backdrop-blur-xl border border-white/10 rounded-3xl p-5 flex items-center justify-between gap-4 flex-wrap">
                                 <div className="flex gap-6">
-                                    <div>
-                                        <p className="text-slate-400 text-xs">Total m²</p>
-                                        <p className="text-white font-black text-xl">{totalM2.toFixed(4)} m²</p>
-                                    </div>
-                                    <div className="border-l border-white/10 pl-6">
-                                        <p className="text-slate-400 text-xs">Valor Estimado</p>
-                                        <p className="text-green-400 font-black text-2xl">R$ {totalValue.toFixed(2)}</p>
-                                    </div>
+                                    <div><p className="text-slate-400 text-xs">Total m²</p><p className="text-white font-black text-xl">{totalM2.toFixed(4)} m²</p></div>
+                                    <div className="border-l border-white/10 pl-6"><p className="text-slate-400 text-xs">Valor Estimado</p><p className="text-green-400 font-black text-2xl">R$ {totalValue.toFixed(2)}</p></div>
                                 </div>
                                 <button onClick={() => setStep('summary')}
                                     className="px-6 py-3 bg-blue-500 hover:bg-blue-400 text-white font-bold rounded-2xl flex items-center gap-2 transition-all cursor-pointer">
@@ -569,16 +681,14 @@ export default function Orcamento() {
                     </div>
                 )}
 
-                {/* ═══════════════ STEP 2: SUMMARY ═══════════════ */}
+                {/* ══════════ STEP 2: SUMMARY ══════════ */}
                 {step === 'summary' && (
                     <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="space-y-6">
                         <div className="bg-white/5 border border-white/10 rounded-3xl p-8 space-y-6" id="quote-print">
                             <div className="flex items-start justify-between">
                                 <div>
                                     <h2 className="text-2xl font-black text-white">Resumo do Orçamento</h2>
-                                    <p className="text-slate-400 text-sm mt-1">
-                                        {new Date().toLocaleDateString('pt-BR', { day: '2-digit', month: 'long', year: 'numeric' })}
-                                    </p>
+                                    <p className="text-slate-400 text-sm mt-1">{new Date().toLocaleDateString('pt-BR', { day: '2-digit', month: 'long', year: 'numeric' })}</p>
                                     <p className="text-slate-300 text-sm mt-1">Cliente: <strong>{user?.name || user?.username}</strong></p>
                                 </div>
                                 <div className="text-right">
@@ -587,75 +697,53 @@ export default function Orcamento() {
                                 </div>
                             </div>
 
-                            {/* Bends table */}
-                            <div className="overflow-x-auto">
-                                <table className="w-full text-sm">
-                                    <thead>
-                                        <tr className="border-b border-white/10">
-                                            <th className="text-left py-3 px-2 text-slate-400 font-bold">Dobra</th>
-                                            <th className="text-left py-3 px-2 text-slate-400 font-bold">Riscos</th>
-                                            <th className="text-right py-3 px-2 text-slate-400 font-bold">Larg. (cm)</th>
-                                            <th className="text-right py-3 px-2 text-slate-400 font-bold">Metros corridos</th>
-                                            <th className="text-right py-3 px-2 text-slate-400 font-bold">m²</th>
-                                            <th className="text-right py-3 px-2 text-slate-400 font-bold">Valor</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody>
-                                        {bends.map((b, i) => (
-                                            <tr key={b.id} className="border-b border-white/5">
-                                                <td className="py-3 px-2 text-white font-bold">#{i + 1}</td>
-                                                <td className="py-3 px-2 text-slate-300">
-                                                    {b.risks.map((r, ri) => (
-                                                        <span key={ri} className="text-xs bg-white/10 rounded px-1.5 py-0.5 mr-1">
-                                                            {DIRECTION_ICONS[r.direction]} {r.sizeCm}cm
-                                                        </span>
-                                                    ))}
-                                                </td>
-                                                <td className="py-3 px-2 text-right text-white">
-                                                    {b.totalWidthCm.toFixed(1)} → <strong className="text-blue-400">{b.roundedWidthCm}</strong>
-                                                </td>
-                                                <td className="py-3 px-2 text-right text-white">
-                                                    {b.lengths.filter(l => parseFloat(l) > 0).join(', ')} = {b.totalLengthM.toFixed(2)} m
-                                                </td>
-                                                <td className="py-3 px-2 text-right font-bold text-blue-400">{b.m2.toFixed(4)}</td>
-                                                <td className="py-3 px-2 text-right font-bold text-green-400">R$ {(b.m2 * pricePerM2).toFixed(2)}</td>
-                                            </tr>
-                                        ))}
-                                    </tbody>
-                                    <tfoot>
-                                        <tr className="border-t-2 border-white/20">
-                                            <td colSpan={4} className="py-4 px-2 text-right text-slate-300 font-bold">Total m²:</td>
-                                            <td className="py-4 px-2 text-right font-black text-white text-lg">{totalM2.toFixed(4)}</td>
-                                            <td></td>
-                                        </tr>
-                                        <tr>
-                                            <td colSpan={4} className="py-2 px-2 text-right text-slate-300 font-bold">Valor por m²:</td>
-                                            <td colSpan={2} className="py-2 px-2 text-right text-white">R$ {pricePerM2.toFixed(2)}</td>
-                                        </tr>
-                                        <tr className="bg-green-500/10 rounded-2xl">
-                                            <td colSpan={4} className="py-4 px-2 text-right font-black text-white text-lg">TOTAL A PAGAR:</td>
-                                            <td colSpan={2} className="py-4 px-2 text-right font-black text-green-400 text-2xl">R$ {totalValue.toFixed(2)}</td>
-                                        </tr>
-                                    </tfoot>
-                                </table>
+                            {/* Bends with images */}
+                            {bends.map((b, i) => (
+                                <div key={b.id} className="border border-white/10 rounded-2xl p-5 space-y-4">
+                                    <div className="flex items-center gap-3">
+                                        <span className="w-8 h-8 bg-blue-500 rounded-full flex items-center justify-center text-white font-black text-sm">{i + 1}</span>
+                                        <div>
+                                            <p className="text-white font-bold">Dobra {i + 1}</p>
+                                            <p className="text-slate-400 text-xs">{b.risks.map(r => `${DIRECTION_ICONS[r.direction]} ${r.sizeCm}cm`).join(' · ')}</p>
+                                        </div>
+                                        <div className="ml-auto text-right">
+                                            <p className="text-white font-bold">{(b.roundedWidthCm / 100).toFixed(2)}m × {b.totalLengthM.toFixed(2)}m</p>
+                                            <p className="text-blue-400 font-black">{b.m2.toFixed(4)} m²</p>
+                                            <p className="text-green-400 font-bold text-sm">R$ {(b.m2 * pricePerM2).toFixed(2)}</p>
+                                        </div>
+                                    </div>
+                                    {b.svgDataUrl && (
+                                        <div className="relative group cursor-pointer" onClick={() => setZoomImg(b.svgDataUrl!)}>
+                                            <img src={b.svgDataUrl} alt={`Dobra ${i + 1}`}
+                                                className="w-full rounded-xl group-hover:opacity-90 transition-opacity"
+                                                style={{ maxHeight: 180, objectFit: 'contain', background: '#1e293b' }} />
+                                            <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
+                                                <ZoomIn className="w-8 h-8 text-white drop-shadow-lg" />
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
+                            ))}
+
+                            {/* Total */}
+                            <div className="border-t border-white/10 pt-4 space-y-2 text-sm">
+                                <div className="flex justify-between text-slate-300"><span>Total m²:</span><strong className="text-white">{totalM2.toFixed(4)} m²</strong></div>
+                                <div className="flex justify-between text-slate-300"><span>Preço por m²:</span><span>R$ {pricePerM2.toFixed(2)}</span></div>
+                                <div className="flex justify-between text-lg font-black"><span className="text-white">TOTAL A PAGAR:</span><span className="text-green-400">R$ {totalValue.toFixed(2)}</span></div>
                             </div>
 
                             {/* Notes */}
                             <div>
                                 <label className="block text-sm font-bold text-slate-300 mb-2">Observações (opcional)</label>
-                                <textarea
-                                    rows={3}
-                                    value={notes}
-                                    onChange={e => setNotes(e.target.value)}
-                                    placeholder="Ex: Cor da calha, tipo de material, urgência..."
-                                    className="w-full bg-white/10 border border-white/20 rounded-2xl px-5 py-3 text-white placeholder-white/30 focus:outline-none focus:border-blue-400 transition-all"
-                                />
+                                <textarea rows={3} value={notes} onChange={e => setNotes(e.target.value)}
+                                    placeholder="Ex: Cor da calha, material, urgência..."
+                                    className="w-full bg-white/10 border border-white/20 rounded-2xl px-5 py-3 text-white placeholder-white/30 focus:outline-none focus:border-blue-400 transition-all" />
                             </div>
                         </div>
 
                         {/* Actions */}
                         <div className="flex flex-wrap gap-3 justify-between">
-                            <div className="flex gap-3">
+                            <div className="flex gap-3 flex-wrap">
                                 <button onClick={() => setStep('bends')}
                                     className="px-5 py-3 bg-white/10 hover:bg-white/20 text-white rounded-2xl flex items-center gap-2 font-bold transition-all cursor-pointer">
                                     <ChevronLeft className="w-4 h-4" /> Voltar
@@ -677,7 +765,7 @@ export default function Orcamento() {
                     </motion.div>
                 )}
 
-                {/* ═══════════════ STEP 3: PAYMENT ═══════════════ */}
+                {/* ══════════ STEP 3: PAYMENT ══════════ */}
                 {step === 'payment' && savedQuote && (
                     <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="space-y-6">
                         <div className="text-center bg-green-500/10 border border-green-500/30 rounded-3xl p-8">
@@ -694,27 +782,23 @@ export default function Orcamento() {
                                         <p className="text-slate-400 text-xs uppercase tracking-wider mb-2">Valor a Pagar</p>
                                         <p className="text-4xl font-black text-green-400">R$ {parseFloat(savedQuote.finalValue || savedQuote.totalValue || 0).toFixed(2)}</p>
                                     </div>
-                                    {settings.pixKey && (
+                                    {settings.pixKey ? (
                                         <div className="bg-white/5 rounded-2xl p-5">
                                             <p className="text-slate-400 text-xs uppercase tracking-wider mb-2">Chave PIX</p>
                                             <div className="flex items-center gap-3">
                                                 <code className="text-white font-bold flex-1 break-all">{settings.pixKey}</code>
-                                                <button
-                                                    onClick={() => navigator.clipboard.writeText(settings.pixKey).then(() => setToast({ msg: 'Chave PIX copiada!', type: 'success' }))}
-                                                    className="p-2 bg-blue-500 hover:bg-blue-400 text-white rounded-xl transition-all cursor-pointer"
-                                                >
+                                                <button onClick={() => navigator.clipboard.writeText(settings.pixKey).then(() => setToast({ msg: 'Chave PIX copiada!', type: 'success' }))}
+                                                    className="p-2 bg-blue-500 hover:bg-blue-400 text-white rounded-xl transition-all cursor-pointer">
                                                     <Copy className="w-4 h-4" />
                                                 </button>
                                             </div>
                                         </div>
-                                    )}
-                                    {!settings.pixKey && (
+                                    ) : (
                                         <div className="bg-yellow-500/10 border border-yellow-500/30 rounded-2xl p-4 text-yellow-300 text-sm">
                                             ⚠ Chave PIX não configurada. Entre em contato via WhatsApp.
                                         </div>
                                     )}
                                 </div>
-
                                 {settings.pixQrCodeUrl && (
                                     <div className="flex items-center justify-center">
                                         <div className="bg-white p-4 rounded-2xl">
@@ -725,52 +809,39 @@ export default function Orcamento() {
                                 )}
                             </div>
 
-                            {/* Upload comprovante */}
                             <div className="border-t border-white/10 pt-6">
                                 <h4 className="font-bold text-white mb-3">📎 Enviar Comprovante</h4>
                                 <div className="flex gap-3 flex-wrap">
-                                    <input
-                                        ref={proofRef}
-                                        type="file"
-                                        accept="image/*,application/pdf"
+                                    <input type="file" accept="image/*,application/pdf"
                                         onChange={e => setProofFile(e.target.files?.[0] || null)}
-                                        className="flex-1 bg-white/10 border border-white/20 rounded-2xl px-4 py-3 text-white text-sm file:mr-3 file:py-1.5 file:px-4 file:rounded-full file:border-0 file:text-xs file:font-bold file:bg-white/20 file:text-white cursor-pointer"
-                                    />
+                                        className="flex-1 bg-white/10 border border-white/20 rounded-2xl px-4 py-3 text-white text-sm file:mr-3 file:py-1.5 file:px-4 file:rounded-full file:border-0 file:text-xs file:font-bold file:bg-white/20 file:text-white cursor-pointer" />
                                     <button onClick={handleUploadProof} disabled={!proofFile || uploadingProof}
                                         className="px-6 py-3 bg-blue-500 hover:bg-blue-400 disabled:opacity-50 text-white font-bold rounded-2xl flex items-center gap-2 transition-all cursor-pointer">
-                                        {uploadingProof ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
-                                        Enviar
+                                        {uploadingProof ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />} Enviar
                                     </button>
                                 </div>
                                 <p className="text-slate-500 text-xs mt-2">Após enviar o comprovante, aguarde a validação da nossa equipe.</p>
                             </div>
 
-                            {/* WhatsApp contact */}
                             {settings.whatsapp && (
-                                <a
-                                    href={`https://wa.me/${settings.whatsapp}?text=${encodeURIComponent(`Olá! Realizei o pagamento do orçamento #${savedQuote.id}.`)}`}
-                                    target="_blank"
-                                    rel="noopener"
-                                    className="flex items-center justify-center gap-3 w-full p-4 bg-green-600 hover:bg-green-500 text-white font-bold rounded-2xl transition-all"
-                                >
-                                    <span className="text-xl">📱</span>
-                                    Confirmar pagamento pelo WhatsApp
+                                <a href={`https://wa.me/${settings.whatsapp}?text=${encodeURIComponent(`Olá! Realizei o pagamento do orçamento #${savedQuote.id}.`)}`}
+                                    target="_blank" rel="noopener"
+                                    className="flex items-center justify-center gap-3 w-full p-4 bg-green-600 hover:bg-green-500 text-white font-bold rounded-2xl transition-all">
+                                    <span className="text-xl">📱</span> Confirmar pagamento pelo WhatsApp
                                 </a>
                             )}
                         </div>
 
                         <div className="flex flex-wrap gap-3 justify-between">
                             <div className="flex gap-3 flex-wrap">
-                                <button onClick={handlePrint}
-                                    className="px-5 py-3 bg-white/10 hover:bg-white/20 text-white rounded-2xl flex items-center gap-2 font-bold transition-all cursor-pointer">
+                                <button onClick={handlePrint} className="px-5 py-3 bg-white/10 hover:bg-white/20 text-white rounded-2xl flex items-center gap-2 font-bold transition-all cursor-pointer">
                                     <Printer className="w-4 h-4" /> Imprimir
                                 </button>
-                                <button onClick={handleDownloadPDF}
-                                    className="px-5 py-3 bg-white/10 hover:bg-white/20 text-white rounded-2xl flex items-center gap-2 font-bold transition-all cursor-pointer">
+                                <button onClick={handleDownloadPDF} className="px-5 py-3 bg-white/10 hover:bg-white/20 text-white rounded-2xl flex items-center gap-2 font-bold transition-all cursor-pointer">
                                     <FileDown className="w-4 h-4" /> Baixar PDF
                                 </button>
                             </div>
-                            <button onClick={() => { setBends([]); setStep('bends'); setSavedQuote(null); setNotes(''); }}
+                            <button onClick={() => { setBends([]); setStep('bends'); setSavedQuote(null); setNotes(''); setShowPostConfirm(false); }}
                                 className="px-5 py-3 bg-white/10 hover:bg-white/20 text-white rounded-2xl flex items-center gap-2 font-bold transition-all cursor-pointer">
                                 <Plus className="w-4 h-4" /> Novo Orçamento
                             </button>
@@ -781,12 +852,12 @@ export default function Orcamento() {
 
             {/* Print styles */}
             <style>{`
-        @media print {
-          body * { visibility: hidden; background: white !important; color: black !important; }
-          #quote-print, #quote-print * { visibility: visible; }
-          #quote-print { position: fixed; top: 0; left: 0; width: 100%; color: black !important; background: white !important; }
-        }
-      `}</style>
+                @media print {
+                    body * { visibility: hidden; background: white !important; color: black !important; }
+                    #quote-print, #quote-print * { visibility: visible; }
+                    #quote-print { position: fixed; top: 0; left: 0; width: 100%; color: black !important; background: white !important; }
+                }
+            `}</style>
         </div>
     );
 }

@@ -11,7 +11,7 @@ type TabId = 'settings' | 'services' | 'posts' | 'gallery' | 'testimonials' | 'u
 
 export default function Admin() {
   const navigate = useNavigate();
-  // activeTab is declared below after isMaster is determined
+  const [activeTab, setActiveTab] = useState<TabId>('quotes'); // default; adjusted by useEffect once user loads
   const [settings, setSettings] = useState<any>({});
   const [logoFile, setLogoFile] = useState<File | null>(null);
   const [heroFile, setHeroFile] = useState<File | null>(null);
@@ -164,9 +164,13 @@ export default function Admin() {
   const isMaster = currentUser?.role === 'master';
   const isAdmin = currentUser?.role === 'admin' || isMaster;
 
-  // Admin-only users start on quotes tab (they can't see settings)
-  const defaultTab: TabId = isMaster ? 'settings' : 'quotes';
-  const [activeTab, setActiveTab] = useState<TabId>(defaultTab);
+  // Redirect to best visible tab when user data first loads
+  useEffect(() => {
+    if (!currentUser) return;
+    if (isMaster && activeTab === 'quotes') setActiveTab('settings');
+    else if (!isMaster && !['users', 'quotes', 'inventory'].includes(activeTab)) setActiveTab('quotes');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentUser?.id]);
 
   const allTabs = [
     { id: 'settings', label: 'Geral', icon: Settings, show: isMaster },
