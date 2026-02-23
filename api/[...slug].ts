@@ -393,6 +393,7 @@ app.post('/api/quotes', authenticate as any, async (req: any, res) => {
                 risks: b.risks, totalWidthCm: b.totalWidthCm,
                 roundedWidthCm: b.roundedWidthCm, lengths: b.lengths,
                 totalLengthM: b.totalLengthM, m2: b.m2,
+                svgDataUrl: b.svgDataUrl || null, // save the visual preview
             }))
         );
     }
@@ -404,26 +405,45 @@ app.post('/api/quotes', authenticate as any, async (req: any, res) => {
     res.json(quote);
 });
 
-app.put('/api/quotes/:id/status', requireAdmin as any, async (req: any, res) => {
+app.put('/api/quotes/:id/status', authenticate as any, async (req: any, res) => {
     const id = parseInt(req.params.id);
-    const { status } = req.body || {};
+    const { status, finalValue, notes } = req.body || {};
+    const isAdminOrMaster = req.user.role === 'admin' || req.user.role === 'master';
+
+    // Get current quote to check ownership and current status
+    const { data: current } = await supabase.from('quotes').select('*').eq('id', id).single();
+    if (!current) return res.status(404).json({ error: 'Orçamento não encontrado' });
+
+    // Regular users can only cancel their own unpaid quotes
+    if (req.user.role === 'user') {
+        if (current.clientId !== req.user.id) return res.status(403).json({ error: 'Acesso negado' });
+        if (status !== 'cancelled') return res.status(403).json({ error: 'Usuários comuns só podem cancelar' });
+        if (current.status === 'paid') return res.status(403).json({ error: 'Orçamento já pago não pode ser cancelado' });
+    }
+
     const updateData: any = { status, updatedAt: new Date().toISOString() };
+    if (finalValue !== undefined && isAdminOrMaster) updateData.finalValue = parseFloat(finalValue);
+    if (notes !== undefined) updateData.notes = notes;
     if (status === 'paid') { updateData.paidAt = new Date().toISOString(); updateData.paidBy = req.user.id; }
 
     const { data: quote, error } = await supabase.from('quotes').update(updateData).eq('id', id).select().single();
     if (error) return res.status(500).json({ error: error.message });
 
-    if (status === 'paid' && quote) {
+    // Financial record: trigger on 'in_production' (not on paid)
+    if (status === 'in_production' && quote) {
         const { data: existing } = await supabase.from('financial_records').select('id').eq('quoteId', id).single();
         if (!existing) {
             await supabase.from('financial_records').insert({
                 quoteId: id, clientName: quote.clientName,
                 grossValue: quote.totalValue, discountValue: quote.discountValue || 0,
-                netValue: quote.finalValue, paymentMethod: 'pix',
-                paidAt: quote.paidAt, confirmedBy: req.user.id,
+                netValue: quote.finalValue || quote.totalValue, paymentMethod: 'pix',
+                status: 'aguardando_pagamento',
+                createdAt: new Date().toISOString(), confirmedBy: req.user.id,
             });
         }
     }
+
+    // Inventory deduction on production
     if (status === 'in_production' && quote?.totalM2) {
         const { data: inventories } = await supabase.from('inventory').select('*').gt('availableM2', 0).order('purchasedAt', { ascending: true });
         let remaining = parseFloat(quote.totalM2);
@@ -436,6 +456,17 @@ app.put('/api/quotes/:id/status', requireAdmin as any, async (req: any, res) => 
         }
     }
     res.json(quote);
+});
+
+app.get('/api/quotes/:id/bends', authenticate as any, async (req: any, res) => {
+    const id = parseInt(req.params.id);
+    // Check access: user can only see their own quotes' bends
+    const { data: quote } = await supabase.from('quotes').select('clientId').eq('id', id).single();
+    if (!quote) return res.status(404).json({ error: 'Not found' });
+    if (req.user.role === 'user' && quote.clientId !== req.user.id) return res.status(403).json({ error: 'Acesso negado' });
+    const { data, error } = await supabase.from('quote_bends').select('*').eq('quoteId', id).order('bendOrder', { ascending: true });
+    if (error) return res.status(500).json({ error: error.message });
+    res.json(data || []);
 });
 
 app.post('/api/quotes/:id/discount', requireMaster as any, async (req: any, res) => {

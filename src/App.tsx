@@ -11,15 +11,19 @@ import Admin from './pages/Admin';
 import Login from './pages/Login';
 import Orcamento from './pages/Orcamento';
 
-const NO_CHROME = ['/login', '/admin', '/orcamento'];
+// Only /admin hides the site navbar (it has its own internal nav)
+// /login is a standalone page without chrome
+// All other pages (including /orcamento) show the full navbar
+const NO_NAVBAR = ['/admin', '/login'];
 
 function AppContent() {
   const location = useLocation();
-  const showChrome = !NO_CHROME.some(p => location.pathname.startsWith(p));
+  const isAdmin = location.pathname.startsWith('/admin');
+  const showNavbar = !NO_NAVBAR.some(p => location.pathname.startsWith(p));
 
   return (
     <div className="min-h-screen flex flex-col bg-slate-50 font-sans text-slate-900">
-      {showChrome && <Navbar />}
+      {showNavbar && <Navbar />}
       <main className="flex-grow">
         <Routes>
           <Route path="/" element={<Home />} />
@@ -32,18 +36,18 @@ function AppContent() {
               <Orcamento />
             </ErrorBoundary>
           } />
-          {/* Admin — wrapped in ErrorBoundary so crashes never show white screen */}
+          {/* Central do Usuário — /admin (manter compatibilidade) */}
           <Route path="/admin" element={
             <ErrorBoundary>
               <Admin />
             </ErrorBoundary>
           } />
-          {/* Catch-all redirect */}
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </main>
-      {showChrome && <Footer />}
-      {showChrome && <WhatsAppButton />}
+      {/* Footer and WhatsApp always visible EXCEPT on admin */}
+      {!isAdmin && <Footer />}
+      {!isAdmin && <WhatsAppButton />}
     </div>
   );
 }

@@ -205,7 +205,7 @@ export default function Admin() {
             <div className="bg-white rounded-3xl p-4 shadow-sm border border-slate-100 sticky top-32">
               <div className="px-4 mb-4">
                 <h2 className="text-xs font-bold text-slate-400 uppercase tracking-widest flex items-center justify-between">
-                  Painel Admin
+                  Central do Usuário
                   {isMaster && <span className="flex items-center gap-1 text-amber-500 text-xs"><Crown className="w-3 h-3" />Master</span>}
                 </h2>
                 <p className="text-xs text-slate-500 mt-1 truncate">{currentUser?.name || currentUser?.username}</p>

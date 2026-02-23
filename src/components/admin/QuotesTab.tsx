@@ -1,13 +1,22 @@
-import React, { useState } from 'react';
-import { Eye, Check, X, Package, ChevronDown, Percent, PenLine } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { Eye, Check, X, Package, ChevronDown, Percent, PenLine, ZoomIn, RefreshCw, RotateCcw } from 'lucide-react';
 
 const STATUS_CONFIG: Record<string, { label: string; color: string }> = {
+    rascunho: { label: 'Rascunho', color: 'bg-slate-100 text-slate-500' },
     pending: { label: 'Aguardando Pgto', color: 'bg-yellow-100 text-yellow-700' },
     paid: { label: 'Pago', color: 'bg-green-100 text-green-700' },
     in_production: { label: 'Em Produção', color: 'bg-blue-100 text-blue-700' },
     finished: { label: 'Finalizado', color: 'bg-slate-100 text-slate-600' },
     cancelled: { label: 'Cancelado', color: 'bg-red-100 text-red-700' },
 };
+
+const ALL_STATUSES = [
+    { value: 'pending', label: '⏳ Aguardando Pagamento' },
+    { value: 'paid', label: '✅ Pago' },
+    { value: 'in_production', label: '🏭 Em Produção' },
+    { value: 'finished', label: '🎯 Finalizado' },
+    { value: 'cancelled', label: '❌ Cancelado' },
+];
 
 interface Props {
     quotes: any[];
@@ -20,12 +29,30 @@ const emptyManual = { clientName: '', totalValue: '', notes: '', status: 'paid' 
 
 export default function QuotesTab({ quotes, currentUser, onSave, showToast }: Props) {
     const [expandedId, setExpandedId] = useState<number | null>(null);
+    const [bendsMap, setBendsMap] = useState<Record<number, any[]>>({});
+    const [loadingBends, setLoadingBends] = useState<number | null>(null);
+    const [zoomImg, setZoomImg] = useState<string | null>(null);
     const [discountModal, setDiscountModal] = useState<any>(null);
     const [discountVal, setDiscountVal] = useState('');
     const [discountReason, setDiscountReason] = useState('');
     const [showCreate, setShowCreate] = useState(false);
     const [manualForm, setManualForm] = useState(emptyManual);
     const [creating, setCreating] = useState(false);
+    const [statusFilter, setStatusFilter] = useState('all');
+
+    const isAdminOrMaster = currentUser?.role === 'admin' || currentUser?.role === 'master';
+    const isMaster = currentUser?.role === 'master';
+
+    // Load bends when a quote is expanded
+    useEffect(() => {
+        if (expandedId == null || bendsMap[expandedId]) return;
+        setLoadingBends(expandedId);
+        fetch(`/api/quotes/${expandedId}/bends`, { credentials: 'include' })
+            .then(r => r.ok ? r.json() : [])
+            .then(data => { setBendsMap(prev => ({ ...prev, [expandedId]: data })); })
+            .catch(() => setBendsMap(prev => ({ ...prev, [expandedId]: [] })))
+            .finally(() => setLoadingBends(null));
+    }, [expandedId]);
 
     const updateStatus = async (id: number, status: string) => {
         const res = await fetch(`/api/quotes/${id}/status`, {
@@ -57,12 +84,8 @@ export default function QuotesTab({ quotes, currentUser, onSave, showToast }: Pr
             const res = await fetch('/api/quotes', {
                 method: 'POST', headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                    clientName: manualForm.clientName,
-                    notes: manualForm.notes,
-                    totalValue: parseFloat(manualForm.totalValue),
-                    totalM2: 0,
-                    bends: [],
-                    adminCreated: true,
+                    clientName: manualForm.clientName, notes: manualForm.notes,
+                    totalValue: parseFloat(manualForm.totalValue), totalM2: 0, bends: [], adminCreated: true,
                 }),
                 credentials: 'include',
             });
@@ -74,56 +97,63 @@ export default function QuotesTab({ quotes, currentUser, onSave, showToast }: Pr
                     body: JSON.stringify({ status: manualForm.status }), credentials: 'include',
                 });
             }
-            showToast('Orçamento manual criado!', 'success');
+            showToast('Orçamento criado!', 'success');
             setManualForm(emptyManual); setShowCreate(false); onSave();
         } catch (e: any) { showToast(e.message || 'Erro ao criar', 'error'); }
         finally { setCreating(false); }
     };
 
+    const filteredQuotes = statusFilter === 'all' ? quotes : quotes.filter(q => q.status === statusFilter);
+
     return (
         <div className="space-y-6 animate-in fade-in duration-300">
-            <div className="flex justify-between items-center">
+            {/* Zoom modal */}
+            {zoomImg && (
+                <div className="fixed inset-0 bg-black/80 z-[9999] flex items-center justify-center p-4" onClick={() => setZoomImg(null)}>
+                    <button className="absolute top-4 right-4 text-white p-2 bg-white/10 rounded-full cursor-pointer"><X className="w-6 h-6" /></button>
+                    <img src={zoomImg} alt="Dobra zoom" className="max-w-full max-h-full rounded-2xl" onClick={e => e.stopPropagation()} />
+                </div>
+            )}
+
+            <div className="flex justify-between items-center flex-wrap gap-3">
                 <h2 className="text-2xl font-bold">Orçamentos</h2>
-                <button onClick={() => setShowCreate(!showCreate)}
-                    className="bg-brand-primary text-white px-4 py-2.5 rounded-xl font-bold flex items-center gap-2 hover:opacity-90 text-sm cursor-pointer">
-                    <PenLine className="w-4 h-4" /> Lançar Manual
-                </button>
+                <div className="flex gap-2 flex-wrap">
+                    <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)}
+                        className="bg-white border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-brand-primary">
+                        <option value="all">Todos os status</option>
+                        {ALL_STATUSES.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
+                    </select>
+                    {isAdminOrMaster && (
+                        <button onClick={() => setShowCreate(!showCreate)}
+                            className="bg-brand-primary text-white px-4 py-2.5 rounded-xl font-bold flex items-center gap-2 hover:opacity-90 text-sm cursor-pointer">
+                            <PenLine className="w-4 h-4" /> Lançar Manual
+                        </button>
+                    )}
+                </div>
             </div>
 
-            {showCreate && (
+            {showCreate && isAdminOrMaster && (
                 <div className="bg-slate-50 border border-slate-200 rounded-3xl p-6 space-y-4">
-                    <h3 className="font-bold text-slate-900 flex items-center gap-2">
-                        <PenLine className="w-4 h-4 text-brand-primary" />Lançamento Manual
-                    </h3>
-                    <p className="text-xs text-slate-500">Admin pode criar orçamento sem comprovante e marcar como pago / em produção diretamente.</p>
+                    <h3 className="font-bold text-slate-900 flex items-center gap-2"><PenLine className="w-4 h-4 text-brand-primary" />Lançamento Manual</h3>
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                        <div>
-                            <label className="text-xs font-bold text-slate-500 uppercase block mb-1">Nome do Cliente *</label>
-                            <input value={manualForm.clientName} onChange={e => setManualForm({ ...manualForm, clientName: e.target.value })}
-                                placeholder="Ex: João Silva"
-                                className="w-full bg-white border border-slate-200 rounded-xl px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-brand-primary" />
-                        </div>
-                        <div>
-                            <label className="text-xs font-bold text-slate-500 uppercase block mb-1">Valor Total (R$) *</label>
-                            <input type="number" step="0.01" value={manualForm.totalValue}
-                                onChange={e => setManualForm({ ...manualForm, totalValue: e.target.value })}
-                                placeholder="Ex: 450.00"
-                                className="w-full bg-white border border-slate-200 rounded-xl px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-brand-primary" />
-                        </div>
+                        {[
+                            { label: 'Nome do Cliente *', key: 'clientName', ph: 'Ex: João Silva' },
+                            { label: 'Valor Total (R$) *', key: 'totalValue', ph: 'Ex: 450.00', type: 'number' },
+                            { label: 'Observações', key: 'notes', ph: 'Ex: calha 6m galvanizada' },
+                        ].map(f => (
+                            <div key={f.key}>
+                                <label className="text-xs font-bold text-slate-500 uppercase block mb-1">{f.label}</label>
+                                <input type={f.type || 'text'} value={(manualForm as any)[f.key]} placeholder={f.ph}
+                                    onChange={e => setManualForm({ ...manualForm, [f.key]: e.target.value })}
+                                    className="w-full bg-white border border-slate-200 rounded-xl px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-brand-primary" />
+                            </div>
+                        ))}
                         <div>
                             <label className="text-xs font-bold text-slate-500 uppercase block mb-1">Status Inicial</label>
                             <select value={manualForm.status} onChange={e => setManualForm({ ...manualForm, status: e.target.value })}
                                 className="w-full bg-white border border-slate-200 rounded-xl px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-brand-primary">
-                                <option value="pending">Aguardando Pagamento</option>
-                                <option value="paid">Marcar como Pago</option>
-                                <option value="in_production">Enviar direto para Produção</option>
+                                {ALL_STATUSES.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
                             </select>
-                        </div>
-                        <div>
-                            <label className="text-xs font-bold text-slate-500 uppercase block mb-1">Observações</label>
-                            <input value={manualForm.notes} onChange={e => setManualForm({ ...manualForm, notes: e.target.value })}
-                                placeholder="Ex: calha 6m galvanizada"
-                                className="w-full bg-white border border-slate-200 rounded-xl px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-brand-primary" />
                         </div>
                     </div>
                     <div className="flex gap-3">
@@ -149,81 +179,156 @@ export default function QuotesTab({ quotes, currentUser, onSave, showToast }: Pr
                             onChange={e => setDiscountReason(e.target.value)}
                             className="w-full bg-slate-50 rounded-xl px-4 py-3 border border-slate-200 focus:ring-2 focus:ring-brand-primary outline-none" />
                         <div className="flex gap-3">
-                            <button onClick={() => setDiscountModal(null)}
-                                className="flex-1 py-2.5 bg-slate-100 rounded-xl font-bold text-slate-600 cursor-pointer hover:bg-slate-200">Cancelar</button>
-                            <button onClick={applyDiscount}
-                                className="flex-1 py-2.5 bg-brand-primary text-white rounded-xl font-bold cursor-pointer hover:opacity-90">Confirmar</button>
+                            <button onClick={() => setDiscountModal(null)} className="flex-1 py-2.5 bg-slate-100 rounded-xl font-bold text-slate-600 cursor-pointer hover:bg-slate-200">Cancelar</button>
+                            <button onClick={applyDiscount} className="flex-1 py-2.5 bg-brand-primary text-white rounded-xl font-bold cursor-pointer hover:opacity-90">Confirmar</button>
                         </div>
                     </div>
                 </div>
             )}
 
+            {/* Stats bar */}
+            <div className="grid grid-cols-3 sm:grid-cols-5 gap-2 text-center text-xs">
+                {ALL_STATUSES.map(s => {
+                    const count = quotes.filter(q => q.status === s.value).length;
+                    const cfg = STATUS_CONFIG[s.value];
+                    return (
+                        <button key={s.value} onClick={() => setStatusFilter(prev => prev === s.value ? 'all' : s.value)}
+                            className={`rounded-xl p-2 border cursor-pointer transition-all ${statusFilter === s.value ? 'ring-2 ring-brand-primary' : ''} ${cfg.color} border-transparent`}>
+                            <p className="font-black text-lg">{count}</p>
+                            <p className="font-bold opacity-70 text-[10px] leading-tight">{cfg.label}</p>
+                        </button>
+                    );
+                })}
+            </div>
+
+            {/* Quotes list */}
             <div className="space-y-3">
-                {quotes.length === 0 && <p className="text-slate-400 text-center py-8">Nenhum orçamento encontrado.</p>}
-                {quotes.map(q => {
+                {filteredQuotes.length === 0 && <p className="text-slate-400 text-center py-8">Nenhum orçamento encontrado.</p>}
+                {filteredQuotes.map(q => {
                     const st = STATUS_CONFIG[q.status] || STATUS_CONFIG.pending;
                     const isExpanded = expandedId === q.id;
+                    const bends = bendsMap[q.id] || [];
                     return (
                         <div key={q.id} className="bg-white border border-slate-100 rounded-2xl overflow-hidden hover:shadow-sm transition-all">
+                            {/* Row */}
                             <div className="p-4 flex items-center gap-4 flex-wrap cursor-pointer" onClick={() => setExpandedId(isExpanded ? null : q.id)}>
                                 <span className="font-black text-slate-300 text-sm">#{q.id}</span>
                                 <div className="flex-1 min-w-0">
                                     <p className="font-bold text-slate-900">{q.clientName || 'Cliente'}</p>
-                                    <p className="text-xs text-slate-400">{new Date(q.createdAt).toLocaleString('pt-BR')}</p>
+                                    <p className="text-xs text-slate-400">{new Date(q.createdAt).toLocaleString('pt-BR')}{q.notes ? ` · ${q.notes.substring(0, 40)}` : ''}</p>
                                 </div>
                                 <span className={`text-xs font-bold px-3 py-1 rounded-full ${st.color}`}>{st.label}</span>
                                 <div className="text-right">
                                     <p className="font-black text-slate-900">R$ {parseFloat(q.finalValue || q.totalValue || 0).toFixed(2)}</p>
-                                    <p className="text-xs text-slate-400">{parseFloat(q.totalM2 || 0).toFixed(2)} m²</p>
+                                    <p className="text-xs text-slate-400">{parseFloat(q.totalM2 || 0).toFixed(4)} m²</p>
                                 </div>
                                 <ChevronDown className={`w-4 h-4 text-slate-400 transition-transform ${isExpanded ? 'rotate-180' : ''}`} />
                             </div>
+
+                            {/* Expanded detail */}
                             {isExpanded && (
-                                <div className="border-t border-slate-100 p-4 space-y-4 bg-slate-50">
-                                    {q.pixProofUrl && (
-                                        <a href={q.pixProofUrl} target="_blank" rel="noopener"
-                                            className="flex items-center gap-2 text-sm font-bold text-brand-primary bg-brand-primary/10 px-4 py-2 rounded-xl w-fit">
-                                            <Eye className="w-4 h-4" /> Ver Comprovante PIX
-                                        </a>
+                                <div className="border-t border-slate-100 p-5 space-y-5 bg-slate-50">
+                                    {/* Bend photos — MOST IMPORTANT */}
+                                    {loadingBends === q.id ? (
+                                        <div className="flex items-center gap-2 text-slate-400 text-sm">
+                                            <RefreshCw className="w-4 h-4 animate-spin" /> Carregando dobras...
+                                        </div>
+                                    ) : bends.length > 0 ? (
+                                        <div>
+                                            <p className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-3">📐 Dobras ({bends.length})</p>
+                                            <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                                                {bends.map((b: any, i: number) => (
+                                                    <div key={b.id} className="bg-white border border-slate-200 rounded-2xl overflow-hidden">
+                                                        {b.svgDataUrl ? (
+                                                            <div className="relative group cursor-pointer" onClick={() => setZoomImg(b.svgDataUrl)}>
+                                                                <img src={b.svgDataUrl} alt={`Dobra ${i + 1}`}
+                                                                    className="w-full object-contain group-hover:opacity-90 transition-opacity"
+                                                                    style={{ height: 120, background: '#1e293b' }} />
+                                                                <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
+                                                                    <ZoomIn className="w-6 h-6 text-white" />
+                                                                </div>
+                                                            </div>
+                                                        ) : (
+                                                            <div className="h-20 bg-slate-100 flex items-center justify-center text-slate-400 text-xs">Sem imagem</div>
+                                                        )}
+                                                        <div className="p-3">
+                                                            <p className="font-bold text-slate-800 text-sm">Dobra {b.bendOrder}</p>
+                                                            <p className="text-xs text-slate-500 mt-0.5">
+                                                                {(b.roundedWidthCm / 100).toFixed(2)}m × {b.totalLengthM?.toFixed(2)}m
+                                                            </p>
+                                                            <p className="text-xs text-blue-600 font-bold">{b.m2?.toFixed(4)} m²</p>
+                                                            {b.risks && Array.isArray(b.risks) && (
+                                                                <p className="text-xs text-slate-400 mt-1 truncate">
+                                                                    {b.risks.map((r: any) => `${r.direction} ${r.sizeCm}cm`).join(' · ')}
+                                                                </p>
+                                                            )}
+                                                        </div>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    ) : (
+                                        <p className="text-xs text-slate-400 italic">Orçamento manual — sem dobras cadastradas.</p>
                                     )}
-                                    {q.discountValue > 0 && (
-                                        <p className="text-sm text-slate-500">Desconto: <span className="text-red-500 font-bold">-R$ {parseFloat(q.discountValue).toFixed(2)}</span></p>
-                                    )}
-                                    {q.notes && <p className="text-sm text-slate-600 italic">"{q.notes}"</p>}
-                                    <div className="flex flex-wrap gap-2">
-                                        {q.status === 'pending' && (<>
-                                            <button onClick={() => updateStatus(q.id, 'paid')}
-                                                className="px-4 py-2 bg-green-500 text-white text-xs font-bold rounded-xl hover:bg-green-600 cursor-pointer flex items-center gap-1">
-                                                <Check className="w-3.5 h-3.5" /> Marcar Pago
-                                            </button>
-                                            <button onClick={() => updateStatus(q.id, 'in_production')}
-                                                className="px-4 py-2 bg-blue-500 text-white text-xs font-bold rounded-xl hover:bg-blue-600 cursor-pointer flex items-center gap-1">
-                                                <Package className="w-3.5 h-3.5" /> Produção Direta
-                                            </button>
-                                            <button onClick={() => updateStatus(q.id, 'cancelled')}
-                                                className="px-4 py-2 bg-red-500 text-white text-xs font-bold rounded-xl hover:bg-red-600 cursor-pointer flex items-center gap-1">
-                                                <X className="w-3.5 h-3.5" /> Cancelar
-                                            </button>
-                                            {currentUser?.role === 'master' && (
-                                                <button onClick={() => setDiscountModal(q)}
-                                                    className="px-4 py-2 bg-purple-500 text-white text-xs font-bold rounded-xl hover:bg-purple-600 cursor-pointer flex items-center gap-1">
-                                                    <Percent className="w-3.5 h-3.5" /> Desconto
-                                                </button>
-                                            )}
-                                        </>)}
-                                        {q.status === 'paid' && (
-                                            <button onClick={() => updateStatus(q.id, 'in_production')}
-                                                className="px-4 py-2 bg-blue-500 text-white text-xs font-bold rounded-xl hover:bg-blue-600 cursor-pointer flex items-center gap-1">
-                                                <Package className="w-3.5 h-3.5" /> Enviar p/ Produção
-                                            </button>
+
+                                    {/* Info row */}
+                                    <div className="flex flex-wrap gap-4 text-sm">
+                                        {q.pixProofUrl && (
+                                            <a href={q.pixProofUrl} target="_blank" rel="noopener"
+                                                className="flex items-center gap-2 text-sm font-bold text-brand-primary bg-brand-primary/10 px-4 py-2 rounded-xl w-fit">
+                                                <Eye className="w-4 h-4" /> Ver Comprovante PIX
+                                            </a>
                                         )}
-                                        {q.status === 'in_production' && (
-                                            <button onClick={() => updateStatus(q.id, 'finished')}
-                                                className="px-4 py-2 bg-slate-800 text-white text-xs font-bold rounded-xl hover:bg-slate-900 cursor-pointer flex items-center gap-1">
-                                                <Check className="w-3.5 h-3.5" /> Finalizar
-                                            </button>
+                                        {q.discountValue > 0 && (
+                                            <p className="text-slate-500">Desconto: <span className="text-red-500 font-bold">-R$ {parseFloat(q.discountValue).toFixed(2)}</span></p>
                                         )}
+                                        {q.notes && <p className="text-slate-600 italic">"{q.notes}"</p>}
                                     </div>
+
+                                    {/* Status actions */}
+                                    {isAdminOrMaster && (
+                                        <div>
+                                            <p className="text-xs font-bold text-slate-400 uppercase mb-2">Alterar Status</p>
+                                            <div className="flex flex-wrap gap-2">
+                                                {q.status !== 'paid' && (
+                                                    <button onClick={() => updateStatus(q.id, 'paid')}
+                                                        className="px-3 py-1.5 bg-green-500 text-white text-xs font-bold rounded-xl hover:bg-green-600 cursor-pointer flex items-center gap-1">
+                                                        <Check className="w-3.5 h-3.5" /> Marcar Pago
+                                                    </button>
+                                                )}
+                                                {q.status !== 'in_production' && (
+                                                    <button onClick={() => updateStatus(q.id, 'in_production')}
+                                                        className="px-3 py-1.5 bg-blue-500 text-white text-xs font-bold rounded-xl hover:bg-blue-600 cursor-pointer flex items-center gap-1">
+                                                        <Package className="w-3.5 h-3.5" /> Enviar Produção
+                                                    </button>
+                                                )}
+                                                {q.status !== 'finished' && (
+                                                    <button onClick={() => updateStatus(q.id, 'finished')}
+                                                        className="px-3 py-1.5 bg-slate-700 text-white text-xs font-bold rounded-xl hover:bg-slate-800 cursor-pointer flex items-center gap-1">
+                                                        <Check className="w-3.5 h-3.5" /> Finalizar
+                                                    </button>
+                                                )}
+                                                {q.status !== 'pending' && (
+                                                    <button onClick={() => updateStatus(q.id, 'pending')}
+                                                        className="px-3 py-1.5 bg-yellow-500 text-white text-xs font-bold rounded-xl hover:bg-yellow-600 cursor-pointer flex items-center gap-1">
+                                                        <RotateCcw className="w-3.5 h-3.5" /> Reabrir
+                                                    </button>
+                                                )}
+                                                {q.status !== 'cancelled' && (
+                                                    <button onClick={() => updateStatus(q.id, 'cancelled')}
+                                                        className="px-3 py-1.5 bg-red-500 text-white text-xs font-bold rounded-xl hover:bg-red-600 cursor-pointer flex items-center gap-1">
+                                                        <X className="w-3.5 h-3.5" /> Cancelar
+                                                    </button>
+                                                )}
+                                                {isMaster && q.status !== 'paid' && (
+                                                    <button onClick={() => setDiscountModal(q)}
+                                                        className="px-3 py-1.5 bg-purple-500 text-white text-xs font-bold rounded-xl hover:bg-purple-600 cursor-pointer flex items-center gap-1">
+                                                        <Percent className="w-3.5 h-3.5" /> Desconto
+                                                    </button>
+                                                )}
+                                            </div>
+                                        </div>
+                                    )}
                                 </div>
                             )}
                         </div>
