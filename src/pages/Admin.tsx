@@ -58,9 +58,21 @@ export default function Admin() {
     try {
       const res = await fetch('/api/auth/check', { credentials: 'include' });
       const data = await res.json();
-      if (!data.authenticated) navigate('/login');
-      else { setCurrentUser(data); fetchData(); }
-    } catch { navigate('/login'); }
+      if (!data.authenticated) {
+        localStorage.removeItem('user');
+        navigate('/login', { replace: true });
+      } else {
+        setCurrentUser(data);
+        // Update localStorage with latest server data
+        localStorage.setItem('user', JSON.stringify({
+          authenticated: true, role: data.role, name: data.name || data.username, id: data.id,
+        }));
+        fetchData();
+      }
+    } catch {
+      localStorage.removeItem('user');
+      navigate('/login', { replace: true });
+    }
     finally { setLoading(false); }
   };
 
@@ -68,7 +80,7 @@ export default function Admin() {
     if (!silent) setLoading(true); else setRefreshing(true);
     try {
       const res = await fetch('/api/admin/data', { credentials: 'include' });
-      if (res.status === 401) return navigate('/login');
+      if (res.status === 401) { localStorage.removeItem('user'); return navigate('/login', { replace: true }); }
       if (!res.ok) throw new Error(await res.text());
       const data = await res.json();
       setSettings(data.settings);
@@ -86,9 +98,9 @@ export default function Admin() {
   };
 
   const handleLogout = async () => {
-    await fetch('/api/logout', { method: 'POST' });
+    try { await fetch('/api/logout', { method: 'POST', credentials: 'include' }); } catch { /* ignore */ }
     localStorage.removeItem('user');
-    navigate('/login');
+    navigate('/', { replace: true });
   };
 
   const handleSaveSettings = async () => {

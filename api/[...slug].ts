@@ -412,6 +412,49 @@ app.post('/api/quotes', authenticate as any, async (req: any, res) => {
     res.json(quote);
 });
 
+// ── EDIT QUOTE ────────────────────────────────────────────────────────────
+app.put('/api/quotes/:id', authenticate as any, async (req: any, res) => {
+    const id = parseInt(req.params.id);
+    const { clientName, bends, notes } = req.body || {};
+    const { data: current } = await supabase.from('quotes').select('*').eq('id', id).single();
+    if (!current) return res.status(404).json({ error: 'Orçamento não encontrado' });
+    if (req.user.role === 'user' && current.clientId !== req.user.id) return res.status(403).json({ error: 'Acesso negado' });
+    if (['in_production', 'paid', 'finished'].includes(current.status) && req.user.role === 'user') {
+        return res.status(403).json({ error: 'Orçamento em produção não pode ser editado' });
+    }
+    let totalM2 = 0;
+    if (Array.isArray(bends)) { for (const b of bends) totalM2 += parseFloat(b.m2 || 0); }
+    const { data: settRows } = await supabase.from('settings').select('*');
+    const sett = (settRows || []).reduce((a: any, s: any) => ({ ...a, [s.key]: s.value }), {});
+    const pricePerM2 = parseFloat(sett.pricePerM2 || '50');
+    const totalValue = totalM2 * pricePerM2;
+    const { data: quote, error } = await supabase.from('quotes').update({
+        clientName: clientName || current.clientName, totalM2, totalValue,
+        finalValue: totalValue, notes, updatedAt: new Date().toISOString(),
+    }).eq('id', id).select().single();
+    if (error) return res.status(500).json({ error: error.message });
+    await supabase.from('quote_bends').delete().eq('quoteId', id);
+    if (Array.isArray(bends) && bends.length > 0) {
+        await supabase.from('quote_bends').insert(bends.map((b: any, i: number) => ({
+            quoteId: id, bendOrder: i + 1, risks: b.risks, totalWidthCm: b.totalWidthCm,
+            roundedWidthCm: b.roundedWidthCm, lengths: b.lengths,
+            totalLengthM: b.totalLengthM, m2: b.m2, svgDataUrl: b.svgDataUrl || null,
+        })));
+    }
+    res.json(quote);
+});
+
+// ── GET BENDS FOR A QUOTE ─────────────────────────────────────────────────
+app.get('/api/quotes/:id/bends', authenticate as any, async (req: any, res) => {
+    const id = parseInt(req.params.id);
+    const { data: quote } = await supabase.from('quotes').select('clientId').eq('id', id).single();
+    if (!quote) return res.status(404).json({ error: 'Orçamento não encontrado' });
+    if (req.user.role === 'user' && quote.clientId !== req.user.id) return res.status(403).json({ error: 'Acesso negado' });
+    const { data, error } = await supabase.from('quote_bends').select('*').eq('quoteId', id).order('bendOrder');
+    if (error) return res.status(500).json({ error: error.message });
+    res.json(data || []);
+});
+
 app.put('/api/quotes/:id/status', authenticate as any, async (req: any, res) => {
     const id = parseInt(req.params.id);
     const { status, finalValue, notes } = req.body || {};

@@ -80,6 +80,8 @@ export default function Orcamento() {
     const [clientName, setClientName] = useState('');
     const [pixKeys, setPixKeys] = useState<any[]>([]);
     const [savingDraft, setSavingDraft] = useState(false);
+    const [libraryZoom, setLibraryZoom] = useState<SavedBend | null>(null);
+    const [editingQuoteId, setEditingQuoteId] = useState<number | null>(null);
 
     // Current bend
     const [currentRisks, setCurrentRisks] = useState<Risk[]>([]);
@@ -122,21 +124,32 @@ export default function Orcamento() {
     }, [toast]);
 
     useEffect(() => {
+        let cancelled = false;
         fetch('/api/auth/check', { credentials: 'include' })
             .then(r => r.json())
             .then(d => {
-                if (!d.authenticated) navigate('/login');
-                else {
+                if (cancelled) return;
+                if (!d.authenticated) {
+                    localStorage.removeItem('user');
+                    navigate('/login', { replace: true });
+                } else {
                     setUser(d);
-                    localStorage.setItem('user', JSON.stringify(d));
-                    // Fetch user's quotes
+                    localStorage.setItem('user', JSON.stringify({
+                        authenticated: true, role: d.role, name: d.name, id: d.id,
+                    }));
                     fetch('/api/quotes', { credentials: 'include' })
                         .then(r => r.json()).then(setMyQuotes).catch(() => { });
                 }
             })
-            .catch(() => navigate('/login'));
+            .catch(() => {
+                if (!cancelled) {
+                    localStorage.removeItem('user');
+                    navigate('/login', { replace: true });
+                }
+            });
         fetch('/api/settings').then(r => r.json()).then(setSettings).catch(() => { });
         fetch('/api/pix-keys').then(r => r.json()).then(setPixKeys).catch(() => { });
+        return () => { cancelled = true; };
     }, []);
 
     const curWidth = sumRisks(currentRisks);
@@ -228,8 +241,10 @@ export default function Orcamento() {
         if (!hasLengths) { setToast({ msg: 'Informe metros corridos em todas as dobras', type: 'error' }); return; }
         setSubmitting(true);
         try {
-            const res = await fetch('/api/quotes', {
-                method: 'POST',
+            const url = editingQuoteId ? `/api/quotes/${editingQuoteId}` : '/api/quotes';
+            const method = editingQuoteId ? 'PUT' : 'POST';
+            const res = await fetch(url, {
+                method,
                 headers: { 'Content-Type': 'application/json' },
                 credentials: 'include',
                 body: JSON.stringify({
@@ -250,7 +265,9 @@ export default function Orcamento() {
             const quote = await res.json();
             setSavedQuote(quote);
             setStep('payment');
-            setToast({ msg: 'Orçamento salvo!', type: 'success' });
+            setEditingQuoteId(null);
+            setToast({ msg: editingQuoteId ? 'Orçamento atualizado!' : 'Orçamento salvo!', type: 'success' });
+            fetch('/api/quotes', { credentials: 'include' }).then(r => r.json()).then(setMyQuotes).catch(() => { });
         } catch (err: any) {
             setToast({ msg: `Erro: ${err.message}`, type: 'error' });
         } finally {
@@ -297,6 +314,34 @@ export default function Orcamento() {
         } else setToast({ msg: 'Erro ao cancelar', type: 'error' });
     };
 
+    const handleEditQuote = async (q: any) => {
+        // Load bends from API and populate builder
+        try {
+            const res = await fetch(`/api/quotes/${q.id}/bends`, { credentials: 'include' });
+            if (!res.ok) throw new Error();
+            const loadedBends = await res.json();
+            const mapped: Bend[] = loadedBends.map((b: any) => ({
+                id: uid(),
+                risks: b.risks || [],
+                totalWidthCm: b.totalWidthCm || 0,
+                roundedWidthCm: b.roundedWidthCm || 0,
+                lengths: b.lengths?.map(String) || [''],
+                totalLengthM: b.totalLengthM || 0,
+                m2: b.m2 || 0,
+                svgDataUrl: b.svgDataUrl || '',
+            }));
+            setBends(mapped);
+            setClientName(q.clientName || '');
+            setNotes(q.notes || '');
+            setEditingQuoteId(q.id);
+            setShowMyQuotes(false);
+            setStep('bends');
+            setToast({ msg: `Editando orçamento #${q.id}`, type: 'success' });
+        } catch {
+            setToast({ msg: 'Erro ao carregar dobras do orçamento', type: 'error' });
+        }
+    };
+
     const handleUploadProof = async () => {
         if (!proofFile || !savedQuote) return;
         setUploadingProof(true);
@@ -313,25 +358,27 @@ export default function Orcamento() {
 
     const handleDownloadPDF = () => {
         const imgRows = bends.map((b, i) => b.svgDataUrl
-            ? `<div style="margin:12px 0"><p style="font-weight:bold;margin:0">Dobra #${i + 1}</p><img src="${b.svgDataUrl}" style="width:100%;max-height:180px;object-fit:contain;background:#1e293b;border-radius:8px"/></div>` : '').join('');
-        const rows = bends.map((b, i) => `<tr><td>#${i + 1}</td><td>${b.risks.map(r => `${DIRECTION_ICONS[r.direction]} ${r.sizeCm}cm`).join(', ')}</td><td>${b.totalWidthCm.toFixed(1)}→<b>${b.roundedWidthCm}cm</b></td><td>${b.lengths.filter(l => parseFloat(l) > 0).join('+')}=${b.totalLengthM.toFixed(2)}m</td><td>${b.m2.toFixed(4)}</td><td>R$${(b.m2 * pricePerM2).toFixed(2)}</td></tr>`).join('');
+            ? `<div style="margin:12px 0;page-break-inside:avoid"><p style="font-weight:bold;margin:0;font-size:14px">Dobra #${i + 1} — <span class="medida">${(b.roundedWidthCm / 100).toFixed(2)}m larg.</span></p><img src="${b.svgDataUrl}" style="width:100%;max-height:180px;object-fit:contain;background:#1e293b;border-radius:8px"/></div>` : '').join('');
+        const rows = bends.map((b, i) => `<tr><td>#${i + 1}</td><td>${b.risks.map(r => `${DIRECTION_ICONS[r.direction]} ${r.sizeCm}cm`).join(', ')}</td><td class="medida">${(b.roundedWidthCm / 100).toFixed(2)}m</td><td class="metros">${b.lengths.filter(l => parseFloat(l) > 0).join('+')}=${b.totalLengthM.toFixed(2)}m</td><td>${b.m2.toFixed(4)}</td><td>R$${(b.m2 * pricePerM2).toFixed(2)}</td></tr>`).join('');
         const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Orçamento Ferreira Calhas</title><style>
 body{font-family:Arial,sans-serif;padding:24px;color:#111;max-width:900px;margin:auto}
 h1{font-size:20px;margin-bottom:4px}
 .status{display:inline-block;background:#fef3c7;color:#92400e;border:2px solid #f59e0b;font-weight:bold;font-size:13px;padding:6px 14px;border-radius:8px;margin:8px 0}
-table{width:100%;border-collapse:collapse;margin-top:12px;font-size:12px}
-th{background:#1e293b;color:#fff;text-align:left;padding:8px}
-td{padding:7px;border-bottom:1px solid #e8e8e8}
+table{width:100%;border-collapse:collapse;margin-top:12px;font-size:13px}
+th{background:#1e293b;color:#fff;text-align:left;padding:10px}
+td{padding:8px;border-bottom:1px solid #e8e8e8}
 tr:nth-child(even) td{background:#f8fafc}
-.big{font-size:16px;font-weight:bold;color:#16a34a}
+.big{font-size:18px;font-weight:bold;color:#16a34a}
+.metros{font-size:16px;font-weight:bold;background:#eef2ff;border:2px solid #6366f1;padding:6px 12px;border-radius:6px;color:#4338ca}
+.medida{font-size:14px;font-weight:bold;color:#1e40af}
 @media print{body{padding:8px}}
 </style></head><body>
 <h1>Orçamento — Ferreira Calhas</h1>
 <p style="color:#555;font-size:12px">${new Date().toLocaleDateString('pt-BR', { day: '2-digit', month: 'long', year: 'numeric' })}</p>
-<p>Cliente: <b>${user?.name || user?.username || ''}</b>${notes ? ` | Obs: ${notes}` : ''}</p>
+<p>Cliente: <b>${clientName || user?.name || user?.username || ''}</b>${notes ? ` | Obs: ${notes}` : ''}</p>
 <div class="status">⏳ STATUS: AGUARDANDO PAGAMENTO</div>
 ${imgRows}
-<table><thead><tr><th>#</th><th>Riscos</th><th>Largura</th><th>Metros corridos</th><th>m²</th><th>Valor</th></tr></thead><tbody>${rows}</tbody>
+<table><thead><tr><th>#</th><th>Riscos</th><th>Largura</th><th style="background:#4338ca">Metros corridos</th><th>m²</th><th>Valor</th></tr></thead><tbody>${rows}</tbody>
 <tfoot>
 <tr><td colspan="4" align="right">Total m²:</td><td colspan="2"><b>${totalM2.toFixed(4)} m²</b></td></tr>
 <tr><td colspan="4" align="right">Preço/m²:</td><td colspan="2">R$ ${pricePerM2.toFixed(2)}</td></tr>
@@ -357,6 +404,57 @@ ${imgRows}
     // ════════════════════════════ RENDER ════════════════════════════════════
     return (
         <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 pt-24 pb-16 px-4" ref={topRef}>
+            {/* Library Zoom Modal */}
+            <AnimatePresence>
+                {libraryZoom && (
+                    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+                        className="fixed inset-0 bg-black/80 z-[9999] flex items-center justify-center p-4"
+                        onClick={() => setLibraryZoom(null)}>
+                        <motion.div initial={{ scale: 0.9 }} animate={{ scale: 1 }} exit={{ scale: 0.9 }}
+                            className="bg-slate-800 border border-white/20 rounded-3xl p-6 max-w-lg w-full space-y-4"
+                            onClick={e => e.stopPropagation()}>
+                            <div className="flex items-center justify-between">
+                                <h3 className="text-white font-bold text-lg">📐 Dobra Salva</h3>
+                                <button onClick={() => setLibraryZoom(null)} className="text-white/60 hover:text-white cursor-pointer"><X className="w-5 h-5" /></button>
+                            </div>
+                            {libraryZoom.svgDataUrl && (
+                                <img src={libraryZoom.svgDataUrl} alt="Dobra" className="w-full rounded-xl" style={{ maxHeight: 300, objectFit: 'contain', background: '#1e293b' }} />
+                            )}
+                            <div className="grid grid-cols-2 gap-3 text-sm">
+                                <div className="bg-white/5 rounded-xl p-3">
+                                    <p className="text-slate-400 text-xs">Largura</p>
+                                    <p className="text-white font-black text-lg">{libraryZoom.roundedWidthCm} cm</p>
+                                </div>
+                                <div className="bg-white/5 rounded-xl p-3">
+                                    <p className="text-slate-400 text-xs">Riscos</p>
+                                    <p className="text-white font-bold">{libraryZoom.risks.length}</p>
+                                </div>
+                            </div>
+                            <div className="bg-white/5 rounded-xl p-3">
+                                <p className="text-slate-400 text-xs mb-1">Detalhes dos riscos</p>
+                                <div className="flex flex-wrap gap-2">
+                                    {libraryZoom.risks.map((r, i) => (
+                                        <span key={i} className="text-white bg-white/10 px-2 py-1 rounded-lg text-sm font-bold">
+                                            {DIRECTION_ICONS[r.direction]} {r.sizeCm}cm
+                                        </span>
+                                    ))}
+                                </div>
+                            </div>
+                            <div className="flex gap-3">
+                                <button onClick={() => { setCurrentRisks(libraryZoom.risks); setLibraryZoom(null); setShowLibrary(false); }}
+                                    className="flex-1 px-4 py-3 bg-blue-500 hover:bg-blue-400 text-white font-bold rounded-xl cursor-pointer flex items-center justify-center gap-2">
+                                    <Plus className="w-4 h-4" /> Usar esta dobra
+                                </button>
+                                <button onClick={() => setLibraryZoom(null)}
+                                    className="px-4 py-3 bg-white/10 hover:bg-white/20 text-white font-bold rounded-xl cursor-pointer">
+                                    Fechar
+                                </button>
+                            </div>
+                        </motion.div>
+                    </motion.div>
+                )}
+            </AnimatePresence>
+
             {/* Toast */}
             <AnimatePresence>
                 {toast && (
@@ -421,6 +519,12 @@ ${imgRows}
                                         </div>
                                         <span className={`text-xs font-bold px-3 py-1 rounded-full text-white ${st.color}`}>{st.label}</span>
                                         <p className="text-white font-black">R$ {parseFloat(q.finalValue || q.totalValue || 0).toFixed(2)}</p>
+                                        {q.status !== 'paid' && q.status !== 'cancelled' && q.status !== 'finished' && q.status !== 'in_production' && (
+                                            <button onClick={() => handleEditQuote(q)}
+                                                className="text-xs text-blue-400 hover:text-blue-300 font-bold px-2 py-1 border border-blue-400/30 rounded-lg cursor-pointer">
+                                                ✏ Editar
+                                            </button>
+                                        )}
                                         {q.status !== 'paid' && q.status !== 'cancelled' && q.status !== 'finished' && (
                                             <button onClick={() => handleCancelQuote(q.id)}
                                                 className="text-xs text-red-400 hover:text-red-300 font-bold px-2 py-1 border border-red-400/30 rounded-lg cursor-pointer">
@@ -474,15 +578,23 @@ ${imgRows}
                                         <p className="text-xs text-slate-400 uppercase tracking-wider">Clique para carregar uma dobra salva:</p>
                                         <div className="flex flex-wrap gap-2">
                                             {bendLibrary.slice(0, 8).map((b, i) => (
-                                                <button key={i} onClick={() => { setCurrentRisks(b.risks); setShowLibrary(false); }}
-                                                    className="flex items-center gap-2 text-xs px-3 py-2 bg-white/10 hover:bg-white/20 text-white rounded-xl transition-all cursor-pointer border border-white/10">
-                                                    {b.svgDataUrl && <img src={b.svgDataUrl} alt="" className="w-10 h-8 rounded object-contain" style={{ background: '#1e293b' }} />}
-                                                    <div className="text-left">
-                                                        <span>{b.risks.map(r => `${DIRECTION_ICONS[r.direction]}${r.sizeCm}`).join(' ')}</span>
-                                                        <span className="text-blue-400 font-bold ml-1">{b.roundedWidthCm}cm</span>
-                                                        {b.useCount > 1 && <span className="ml-1 text-white/40">×{b.useCount}</span>}
-                                                    </div>
-                                                </button>
+                                                <div key={i} className="flex items-center gap-1">
+                                                    <button onClick={() => { setCurrentRisks(b.risks); setShowLibrary(false); }}
+                                                        className="flex items-center gap-2 text-xs px-3 py-2 bg-white/10 hover:bg-white/20 text-white rounded-xl transition-all cursor-pointer border border-white/10">
+                                                        {b.svgDataUrl && <img src={b.svgDataUrl} alt="" className="w-10 h-8 rounded object-contain" style={{ background: '#1e293b' }} />}
+                                                        <div className="text-left">
+                                                            <span>{b.risks.map(r => `${DIRECTION_ICONS[r.direction]}${r.sizeCm}`).join(' ')}</span>
+                                                            <span className="text-blue-400 font-bold ml-1">{b.roundedWidthCm}cm</span>
+                                                            {b.useCount > 1 && <span className="ml-1 text-white/40">×{b.useCount}</span>}
+                                                        </div>
+                                                    </button>
+                                                    {b.svgDataUrl && (
+                                                        <button onClick={() => setLibraryZoom(b)}
+                                                            className="p-1.5 text-white/40 hover:text-white hover:bg-white/10 rounded-lg transition-all cursor-pointer" title="Ampliar">
+                                                            <ZoomIn className="w-3.5 h-3.5" />
+                                                        </button>
+                                                    )}
+                                                </div>
                                             ))}
                                         </div>
                                     </motion.div>

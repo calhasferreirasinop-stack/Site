@@ -1,6 +1,6 @@
-import { Link, useLocation } from 'react-router-dom';
-import { Menu, X, Hammer } from 'lucide-react';
-import { useState, useEffect } from 'react';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
+import { Menu, X, Hammer, LogOut, User as UserIcon, ChevronDown } from 'lucide-react';
+import { useState, useEffect, useRef } from 'react';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 
@@ -12,8 +12,12 @@ export default function Navbar() {
   const [isOpen, setIsOpen] = useState(false);
   const [scrolled, setScrolled] = useState(false);
   const [settings, setSettings] = useState<any>({});
+  const [user, setUser] = useState<any>(null);
+  const [showUserMenu, setShowUserMenu] = useState(false);
   const location = useLocation();
+  const navigate = useNavigate();
   const isHome = location.pathname === '/';
+  const menuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const handleScroll = () => setScrolled(window.scrollY > 20);
@@ -24,8 +28,51 @@ export default function Navbar() {
       .then(setSettings)
       .catch(err => console.error('Error fetching settings:', err));
 
-    return () => window.removeEventListener('scroll', handleScroll);
+    // Check user auth from localStorage (fast hydration)
+    try {
+      const stored = localStorage.getItem('user');
+      if (stored) {
+        const u = JSON.parse(stored);
+        if (u.authenticated) setUser(u);
+      }
+    } catch { /* ignore */ }
+
+    // Close user menu on outside click
+    const handleClickOutside = (e: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+        setShowUserMenu(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+
+    return () => {
+      window.removeEventListener('scroll', handleScroll);
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
   }, []);
+
+  // Re-check user state on route change (e.g. after login)
+  useEffect(() => {
+    try {
+      const stored = localStorage.getItem('user');
+      if (stored) {
+        const u = JSON.parse(stored);
+        if (u.authenticated) setUser(u);
+        else setUser(null);
+      } else setUser(null);
+    } catch { setUser(null); }
+  }, [location.pathname]);
+
+  const handleLogout = async () => {
+    try {
+      await fetch('/api/logout', { method: 'POST', credentials: 'include' });
+    } catch { /* ignore */ }
+    localStorage.removeItem('user');
+    setUser(null);
+    setShowUserMenu(false);
+    setIsOpen(false);
+    navigate('/', { replace: true });
+  };
 
   const navLinks = [
     { name: 'Início', path: '/' },
@@ -88,17 +135,48 @@ export default function Navbar() {
                 {link.name}
               </Link>
             ))}
-            <Link
-              to="/login"
-              className={cn(
-                "text-[10px] uppercase tracking-widest font-black transition-colors border rounded-md px-2 py-1",
-                isScrolledOrNotHome
-                  ? "text-slate-400 border-slate-200 hover:text-brand-primary hover:border-brand-primary"
-                  : "text-white/60 border-white/20 hover:text-white hover:border-white"
-              )}
-            >
-              Central do Usuário
-            </Link>
+
+            {/* User menu or Login link */}
+            {user ? (
+              <div className="relative" ref={menuRef}>
+                <button onClick={() => setShowUserMenu(v => !v)}
+                  className={cn(
+                    "flex items-center gap-2 text-[11px] uppercase tracking-widest font-black transition-colors border rounded-lg px-3 py-1.5 cursor-pointer",
+                    isScrolledOrNotHome
+                      ? "text-slate-600 border-slate-200 hover:text-brand-primary hover:border-brand-primary"
+                      : "text-white/80 border-white/30 hover:text-white hover:border-white"
+                  )}>
+                  <UserIcon className="w-3.5 h-3.5" />
+                  {user.name || 'Usuário'}
+                  <ChevronDown className={cn("w-3 h-3 transition-transform", showUserMenu && "rotate-180")} />
+                </button>
+                {showUserMenu && (
+                  <div className="absolute right-0 top-full mt-2 w-48 bg-white rounded-xl shadow-xl border border-slate-100 py-2 z-50 animate-in fade-in slide-in-from-top-2 duration-200">
+                    <Link to="/admin" onClick={() => setShowUserMenu(false)}
+                      className="flex items-center gap-2 px-4 py-2.5 text-sm font-bold text-slate-700 hover:bg-slate-50 transition-colors">
+                      <UserIcon className="w-4 h-4" /> Central do Usuário
+                    </Link>
+                    <hr className="border-slate-100 my-1" />
+                    <button onClick={handleLogout}
+                      className="flex items-center gap-2 px-4 py-2.5 text-sm font-bold text-red-500 hover:bg-red-50 transition-colors w-full text-left cursor-pointer">
+                      <LogOut className="w-4 h-4" /> Sair
+                    </button>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <Link
+                to="/login"
+                className={cn(
+                  "text-[10px] uppercase tracking-widest font-black transition-colors border rounded-md px-2 py-1",
+                  isScrolledOrNotHome
+                    ? "text-slate-400 border-slate-200 hover:text-brand-primary hover:border-brand-primary"
+                    : "text-white/60 border-white/20 hover:text-white hover:border-white"
+                )}
+              >
+                Central do Usuário
+              </Link>
+            )}
           </div>
 
           {/* Mobile Menu Button */}
@@ -135,13 +213,38 @@ export default function Navbar() {
                 {link.name}
               </Link>
             ))}
-            <Link
-              to="/login"
-              onClick={() => setIsOpen(false)}
-              className="block px-3 py-2 rounded-md text-base font-medium text-slate-400"
-            >
-              Central do Usuário
-            </Link>
+
+            {/* Mobile user section */}
+            {user ? (
+              <>
+                <div className="border-t border-slate-100 pt-2 mt-2">
+                  <p className="px-3 py-1 text-xs font-bold text-slate-400 uppercase">
+                    Logado como: {user.name || 'Usuário'}
+                  </p>
+                  <Link
+                    to="/admin"
+                    onClick={() => setIsOpen(false)}
+                    className="block px-3 py-2 rounded-md text-base font-medium text-slate-600 hover:bg-slate-50"
+                  >
+                    Central do Usuário
+                  </Link>
+                  <button
+                    onClick={handleLogout}
+                    className="block w-full text-left px-3 py-2 rounded-md text-base font-bold text-red-500 hover:bg-red-50 cursor-pointer"
+                  >
+                    🚪 Sair
+                  </button>
+                </div>
+              </>
+            ) : (
+              <Link
+                to="/login"
+                onClick={() => setIsOpen(false)}
+                className="block px-3 py-2 rounded-md text-base font-medium text-slate-400"
+              >
+                Central do Usuário
+              </Link>
+            )}
           </div>
         </div>
       )}

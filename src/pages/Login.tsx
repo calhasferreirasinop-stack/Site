@@ -7,29 +7,36 @@ export default function Login() {
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [checking, setChecking] = useState(true); // prevents flash/loop
   const navigate = useNavigate();
 
-  // If already logged in, redirect immediately
+  // Check if already logged in — ONE check only, with loading state
   useEffect(() => {
-    const stored = localStorage.getItem('user');
-    if (stored) {
+    let cancelled = false;
+    const check = async () => {
       try {
-        const u = JSON.parse(stored);
-        if (u.authenticated) {
-          // Verify with server
-          fetch('/api/auth/check', { credentials: 'include' })
-            .then(r => r.json())
-            .then(d => {
-              if (d.authenticated) {
-                if (d.role === 'user') navigate('/orcamento');
-                else navigate('/admin');
-              } else {
-                localStorage.removeItem('user');
-              }
-            });
+        const res = await fetch('/api/auth/check', { credentials: 'include' });
+        const d = await res.json();
+        if (cancelled) return;
+        if (d.authenticated) {
+          // Save to localStorage and redirect
+          localStorage.setItem('user', JSON.stringify({
+            authenticated: true, role: d.role, name: d.name, id: d.id,
+          }));
+          if (d.role === 'user') navigate('/orcamento', { replace: true });
+          else navigate('/admin', { replace: true });
+        } else {
+          // Not authenticated — clear stale localStorage
+          localStorage.removeItem('user');
+          setChecking(false);
         }
-      } catch { /* ignore */ }
-    }
+      } catch {
+        localStorage.removeItem('user');
+        if (!cancelled) setChecking(false);
+      }
+    };
+    check();
+    return () => { cancelled = true; };
   }, []);
 
   const handleLogin = async (e: React.FormEvent) => {
@@ -47,19 +54,16 @@ export default function Login() {
 
       if (response.ok) {
         const data = await response.json();
-        // Persist auth in localStorage for session hydration
         localStorage.setItem('user', JSON.stringify({
           authenticated: true,
           role: data.role,
           name: data.name,
           id: data.id,
         }));
-        // role: user → goes to Orcamento (their workspace)
-        // role: admin / master → goes to Central do Usuário (admin panel)
         if (data.role === 'user') {
-          navigate('/orcamento');
+          navigate('/orcamento', { replace: true });
         } else {
-          navigate('/admin');
+          navigate('/admin', { replace: true });
         }
       } else {
         setError('Usuário ou senha inválidos');
@@ -70,6 +74,18 @@ export default function Login() {
       setLoading(false);
     }
   };
+
+  // Show loading spinner while checking auth
+  if (checking) {
+    return (
+      <div className="min-h-screen bg-slate-900 flex items-center justify-center pt-24">
+        <div className="text-center">
+          <div className="w-10 h-10 border-4 border-white/20 border-t-white rounded-full animate-spin mx-auto mb-4" />
+          <p className="text-white/60 text-sm">Verificando sessão...</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-slate-900 flex items-center justify-center p-4 pt-24">
