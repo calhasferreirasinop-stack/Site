@@ -479,7 +479,7 @@ app.put('/api/quotes/:id/status', authenticate as any, async (req: any, res) => 
     const { data: quote, error } = await supabase.from('quotes').update(updateData).eq('id', id).select().single();
     if (error) return res.status(500).json({ error: error.message });
 
-    // Financial record: trigger on 'in_production' (not on paid)
+    // ── Financial: CREATE record on 'in_production' ──────────────────────
     if (status === 'in_production' && quote) {
         const { data: existing } = await supabase.from('financial_records').select('id').eq('quoteId', id).single();
         if (!existing) {
@@ -490,6 +490,38 @@ app.put('/api/quotes/:id/status', authenticate as any, async (req: any, res) => 
                 status: 'aguardando_pagamento', paidAt: new Date().toISOString(),
                 createdAt: new Date().toISOString(), confirmedBy: req.user.id,
             });
+        }
+    }
+
+    // ── Financial: UPDATE record on 'paid' ───────────────────────────────
+    if (status === 'paid') {
+        await supabase.from('financial_records').update({
+            status: 'pago', paidAt: new Date().toISOString(),
+            netValue: quote?.finalValue || quote?.totalValue,
+        }).eq('quoteId', id);
+    }
+
+    // ── Financial: REMOVE record on reopen (pending) or cancel ───────────
+    if ((status === 'pending' || status === 'cancelled') && quote) {
+        await supabase.from('financial_records').delete().eq('quoteId', id);
+        // Restore inventory that was deducted
+        const { data: txns } = await supabase.from('inventory_transactions')
+            .select('*').eq('quoteId', id).eq('type', 'consumption');
+        if (txns && txns.length > 0) {
+            for (const tx of txns) {
+                // Get current inventory and restore consumed amount
+                const { data: inv } = await supabase.from('inventory').select('availableM2').eq('id', tx.inventoryId).single();
+                if (inv) {
+                    await supabase.from('inventory').update({
+                        availableM2: parseFloat(inv.availableM2) + parseFloat(tx.m2Amount)
+                    }).eq('id', tx.inventoryId);
+                }
+                // Record restoration transaction
+                await supabase.from('inventory_transactions').insert({
+                    inventoryId: tx.inventoryId, quoteId: id, type: 'restoration',
+                    m2Amount: parseFloat(tx.m2Amount), createdBy: req.user.id,
+                });
+            }
         }
     }
 

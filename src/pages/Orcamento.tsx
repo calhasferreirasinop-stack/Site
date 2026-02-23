@@ -95,6 +95,8 @@ export default function Orcamento() {
     const [savingDraft, setSavingDraft] = useState(false);
     const [libraryZoom, setLibraryZoom] = useState<SavedBend | null>(null);
     const [editingQuoteId, setEditingQuoteId] = useState<number | null>(null);
+    const [reportQuote, setReportQuote] = useState<any | null>(null);
+    const [reportBends, setReportBends] = useState<any[]>([]);
 
     // Current bend
     const [currentRisks, setCurrentRisks] = useState<Risk[]>([]);
@@ -355,6 +357,61 @@ export default function Orcamento() {
         }
     };
 
+    // ── View Report / Download PDF for any quote from listing ──────────────
+    const handleViewReport = async (q: any) => {
+        try {
+            const res = await fetch(`/api/quotes/${q.id}/bends`, { credentials: 'include' });
+            if (!res.ok) throw new Error();
+            const loadedBends = await res.json();
+            setReportBends(loadedBends);
+            setReportQuote(q);
+        } catch {
+            setToast({ msg: 'Erro ao carregar relatório', type: 'error' });
+        }
+    };
+
+    const handleDownloadQuotePDF = (q: any, qBends: any[]) => {
+        const pm2 = parseFloat(settings.pricePerM2 || '50');
+        const imgRows = qBends.map((b: any, i: number) => b.svgDataUrl
+            ? `<div style="margin:12px 0;page-break-inside:avoid"><p style="font-weight:bold;margin:0;font-size:14px">Dobra #${i + 1} — <span class="medida">${((b.roundedWidthCm || 0) / 100).toFixed(2)}m larg.</span></p><img src="${b.svgDataUrl}" style="width:100%;max-height:180px;object-fit:contain;background:#1e293b;border-radius:8px"/></div>` : '').join('');
+        const rows = qBends.map((b: any, i: number) => {
+            const lengths = Array.isArray(b.lengths) ? b.lengths : [];
+            const totalLen = b.totalLengthM || lengths.filter((l: any) => parseFloat(l) > 0).reduce((a: number, c: any) => a + parseFloat(c), 0);
+            const w = b.roundedWidthCm || 0;
+            const m2 = b.m2 || (w / 100 * totalLen);
+            return `<tr><td>#${i + 1}</td><td>${(b.risks || []).map((r: any) => `${DIRECTION_ICONS[r.direction as RiskDirection] || ''} ${r.sizeCm}cm`).join(', ')}</td><td class="medida">${(w / 100).toFixed(2)}m</td><td class="metros">${lengths.filter((l: any) => parseFloat(l) > 0).join('+')}=${totalLen.toFixed(2)}m</td><td>${m2.toFixed(4)}</td><td>R$${(m2 * pm2).toFixed(2)}</td></tr>`;
+        }).join('');
+        const tM2 = parseFloat(q.totalM2 || 0);
+        const tVal = parseFloat(q.finalValue || q.totalValue || 0);
+        const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Orçamento #${q.id}</title><style>
+body{font-family:Arial,sans-serif;padding:24px;color:#111;max-width:900px;margin:auto}
+h1{font-size:20px;margin-bottom:4px}
+.status{display:inline-block;background:#fef3c7;color:#92400e;border:2px solid #f59e0b;font-weight:bold;font-size:13px;padding:6px 14px;border-radius:8px;margin:8px 0}
+table{width:100%;border-collapse:collapse;margin-top:12px;font-size:13px}
+th{background:#1e293b;color:#fff;text-align:left;padding:10px}
+td{padding:8px;border-bottom:1px solid #e8e8e8}
+tr:nth-child(even) td{background:#f8fafc}
+.big{font-size:18px;font-weight:bold;color:#16a34a}
+.metros{font-size:16px;font-weight:bold;background:#eef2ff;border:2px solid #6366f1;padding:6px 12px;border-radius:6px;color:#4338ca}
+.medida{font-size:14px;font-weight:bold;color:#1e40af}
+@media print{body{padding:8px}}
+</style></head><body>
+<h1>Orçamento #${q.id} — Ferreira Calhas</h1>
+<p>Cliente: <b>${q.clientName || ''}</b>${q.notes ? ` | Obs: ${q.notes}` : ''}</p>
+<div class="status">⏳ STATUS: ${(STATUS_LABELS[q.status]?.label || q.status).toUpperCase()}</div>
+${imgRows}
+<table><thead><tr><th>#</th><th>Riscos</th><th>Largura</th><th style="background:#4338ca">Metros corridos</th><th>m²</th><th>Valor</th></tr></thead><tbody>${rows}</tbody>
+<tfoot>
+<tr><td colspan="4" align="right">Total m²:</td><td colspan="2"><b>${tM2.toFixed(4)} m²</b></td></tr>
+<tr><td colspan="4" align="right">Preço/m²:</td><td colspan="2">R$ ${pm2.toFixed(2)}</td></tr>
+<tr><td colspan="4" align="right" style="font-size:18px;font-weight:900">TOTAL:</td><td colspan="2" class="big">R$ ${tVal.toFixed(2)}</td></tr>
+</tfoot></table>
+<p style="margin-top:16px;color:#888;font-size:11px">Gerado em ${new Date().toLocaleString('pt-BR')}</p>
+</body></html>`;
+        const w2 = window.open('', '_blank');
+        if (w2) { w2.document.write(html); w2.document.close(); w2.print(); }
+    };
+
     const handleUploadProof = async () => {
         if (!proofFile || !savedQuote) return;
         setUploadingProof(true);
@@ -468,6 +525,68 @@ ${imgRows}
                 )}
             </AnimatePresence>
 
+            {/* Report View Modal */}
+            <AnimatePresence>
+                {reportQuote && (
+                    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+                        className="fixed inset-0 bg-black/80 z-[9999] flex items-center justify-center p-4 overflow-auto"
+                        onClick={() => setReportQuote(null)}>
+                        <motion.div initial={{ scale: 0.95 }} animate={{ scale: 1 }} exit={{ scale: 0.95 }}
+                            className="bg-slate-800 border border-white/20 rounded-3xl p-6 max-w-2xl w-full max-h-[90vh] overflow-y-auto space-y-4"
+                            onClick={e => e.stopPropagation()}>
+                            <div className="flex items-center justify-between">
+                                <h3 className="text-white font-black text-lg">📊 Relatório — Orçamento #{reportQuote.id}</h3>
+                                <button onClick={() => setReportQuote(null)} className="text-white/60 hover:text-white cursor-pointer"><X className="w-5 h-5" /></button>
+                            </div>
+                            <div className="flex items-center gap-3 text-sm">
+                                <span className="text-slate-400">Cliente:</span>
+                                <span className="text-white font-bold">{reportQuote.clientName || 'N/A'}</span>
+                                <span className={`ml-auto text-xs font-bold px-3 py-1 rounded-full text-white ${(STATUS_LABELS[reportQuote.status] || STATUS_LABELS.pending).color}`}>
+                                    {(STATUS_LABELS[reportQuote.status] || STATUS_LABELS.pending).label}
+                                </span>
+                            </div>
+                            <div className="text-right text-green-400 font-black text-2xl">
+                                R$ {parseFloat(reportQuote.finalValue || reportQuote.totalValue || 0).toFixed(2)}
+                            </div>
+                            {reportBends.length > 0 ? reportBends.map((b: any, i: number) => (
+                                <div key={i} className="bg-white/5 border border-white/10 rounded-2xl p-4 space-y-3">
+                                    <div className="flex items-center justify-between">
+                                        <p className="text-white font-bold">Dobra #{i + 1}</p>
+                                        <p className="text-blue-400 font-black">{((b.roundedWidthCm || 0) / 100).toFixed(2)}m larg.</p>
+                                    </div>
+                                    {b.svgDataUrl && (
+                                        <img src={b.svgDataUrl} alt={`Dobra ${i + 1}`} className="w-full rounded-xl" style={{ maxHeight: 200, objectFit: 'contain', background: '#1e293b' }} />
+                                    )}
+                                    <div className="grid grid-cols-2 gap-2 text-sm">
+                                        <div className="bg-white/5 rounded-xl p-3">
+                                            <p className="text-slate-400 text-xs">Riscos</p>
+                                            <p className="text-white font-bold">{(b.risks || []).map((r: any) => `${DIRECTION_ICONS[r.direction as RiskDirection] || ''} ${r.sizeCm}cm`).join(', ')}</p>
+                                        </div>
+                                        <div className="bg-indigo-500/10 border border-indigo-500/30 rounded-xl p-3">
+                                            <p className="text-indigo-300 text-xs font-bold">Metros Corridos</p>
+                                            <p className="text-white font-black text-lg">{(b.totalLengthM || 0).toFixed(2)} m</p>
+                                        </div>
+                                    </div>
+                                    {Array.isArray(b.lengths) && b.lengths.filter((l: any) => parseFloat(l) > 0).length > 0 && (
+                                        <div className="text-xs text-slate-400">Cortes: {b.lengths.filter((l: any) => parseFloat(l) > 0).join('m + ')}m</div>
+                                    )}
+                                </div>
+                            )) : <p className="text-slate-400 text-sm">Nenhuma dobra encontrada.</p>}
+                            <div className="flex gap-3">
+                                <button onClick={() => handleDownloadQuotePDF(reportQuote, reportBends)}
+                                    className="flex-1 px-4 py-3 bg-indigo-500 hover:bg-indigo-400 text-white font-bold rounded-xl cursor-pointer flex items-center justify-center gap-2">
+                                    <FileDown className="w-4 h-4" /> Baixar PDF
+                                </button>
+                                <button onClick={() => setReportQuote(null)}
+                                    className="px-4 py-3 bg-white/10 hover:bg-white/20 text-white font-bold rounded-xl cursor-pointer">
+                                    Fechar
+                                </button>
+                            </div>
+                        </motion.div>
+                    </motion.div>
+                )}
+            </AnimatePresence>
+
             {/* Toast */}
             <AnimatePresence>
                 {toast && (
@@ -544,6 +663,20 @@ ${imgRows}
                                                 Cancelar
                                             </button>
                                         )}
+                                        <button onClick={() => handleViewReport(q)}
+                                            className="text-xs text-emerald-400 hover:text-emerald-300 font-bold px-2 py-1 border border-emerald-400/30 rounded-lg cursor-pointer">
+                                            👁️ Relatório
+                                        </button>
+                                        <button onClick={async () => {
+                                            try {
+                                                const r = await fetch(`/api/quotes/${q.id}/bends`, { credentials: 'include' });
+                                                if (!r.ok) throw new Error();
+                                                handleDownloadQuotePDF(q, await r.json());
+                                            } catch { setToast({ msg: 'Erro ao gerar PDF', type: 'error' }); }
+                                        }}
+                                            className="text-xs text-indigo-400 hover:text-indigo-300 font-bold px-2 py-1 border border-indigo-400/30 rounded-lg cursor-pointer">
+                                            📄 PDF
+                                        </button>
                                     </div>
                                 );
                             })}
@@ -884,7 +1017,8 @@ ${imgRows}
                         <div className="flex flex-wrap gap-3 justify-between">
                             <div className="flex gap-3 flex-wrap">
                                 <button onClick={() => setStep('bends')} className="px-5 py-3 bg-white/10 hover:bg-white/20 text-white rounded-2xl flex items-center gap-2 font-bold cursor-pointer"><ChevronLeft className="w-4 h-4" /> Voltar</button>
-                                <button onClick={handleDownloadPDF} className="px-5 py-3 bg-white/10 hover:bg-white/20 text-white rounded-2xl flex items-center gap-2 font-bold cursor-pointer"><Printer className="w-4 h-4" /> Imprimir / PDF</button>
+                                <button onClick={() => window.print()} className="px-5 py-3 bg-white/10 hover:bg-white/20 text-white rounded-2xl flex items-center gap-2 font-bold cursor-pointer"><Printer className="w-4 h-4" /> Imprimir</button>
+                                <button onClick={handleDownloadPDF} className="px-5 py-3 bg-indigo-500 hover:bg-indigo-400 text-white rounded-2xl flex items-center gap-2 font-bold cursor-pointer"><FileDown className="w-4 h-4" /> Baixar PDF</button>
                             </div>
                             <button onClick={handleSubmit} disabled={submitting}
                                 className="px-8 py-3 bg-green-500 hover:bg-green-400 disabled:opacity-50 text-white font-black rounded-2xl flex items-center gap-2 cursor-pointer text-lg">
@@ -975,7 +1109,8 @@ ${imgRows}
                         </div>
                         <div className="flex flex-wrap gap-3 justify-between">
                             <div className="flex gap-3 flex-wrap">
-                                <button onClick={handleDownloadPDF} className="px-5 py-3 bg-white/10 hover:bg-white/20 text-white rounded-2xl flex items-center gap-2 font-bold cursor-pointer"><Printer className="w-4 h-4" /> Imprimir / PDF</button>
+                                <button onClick={() => window.print()} className="px-5 py-3 bg-white/10 hover:bg-white/20 text-white rounded-2xl flex items-center gap-2 font-bold cursor-pointer"><Printer className="w-4 h-4" /> Imprimir</button>
+                                <button onClick={handleDownloadPDF} className="px-5 py-3 bg-indigo-500 hover:bg-indigo-400 text-white rounded-2xl flex items-center gap-2 font-bold cursor-pointer"><FileDown className="w-4 h-4" /> Baixar PDF</button>
                                 <button onClick={() => { setBends([]); setStep('bends'); setSavedQuote(null); setNotes(''); setClientName(''); setShowPostConfirm(false); setShowMyQuotes(true); fetch('/api/quotes', { credentials: 'include' }).then(r => r.json()).then(setMyQuotes).catch(() => { }); }}
                                     className="px-5 py-3 bg-blue-500 hover:bg-blue-400 text-white rounded-2xl flex items-center gap-2 font-bold cursor-pointer">
                                     <List className="w-4 h-4" /> Ir para Listagem
