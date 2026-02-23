@@ -11,7 +11,7 @@ type TabId = 'settings' | 'services' | 'posts' | 'gallery' | 'testimonials' | 'u
 
 export default function Admin() {
   const navigate = useNavigate();
-  const [activeTab, setActiveTab] = useState<TabId>('settings');
+  // activeTab is declared below after isMaster is determined
   const [settings, setSettings] = useState<any>({});
   const [logoFile, setLogoFile] = useState<File | null>(null);
   const [heroFile, setHeroFile] = useState<File | null>(null);
@@ -26,6 +26,7 @@ export default function Admin() {
   const [currentUser, setCurrentUser] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [pendingCount, setPendingCount] = useState(0);
   const [newService, setNewService] = useState({ title: '', description: '', image: null as File | null });
   const [newPost, setNewPost] = useState({ title: '', content: '', image: null as File | null });
   const [newGalleryItem, setNewGalleryItem] = useState({ description: '', serviceId: '', images: [] as File[] });
@@ -40,6 +41,18 @@ export default function Admin() {
   const showToast = (message: string, type: 'success' | 'error') => setToast({ show: true, message, type });
 
   useEffect(() => { checkAuth(); }, []);
+
+  // Badge: poll pending quote count every 30s
+  useEffect(() => {
+    const refresh = () =>
+      fetch('/api/quotes/pending-count', { credentials: 'include' })
+        .then(r => r.ok ? r.json() : { count: 0 })
+        .then(d => setPendingCount(d.count || 0))
+        .catch(() => { });
+    refresh();
+    const interval = setInterval(refresh, 30000);
+    return () => clearInterval(interval);
+  }, []);
 
   const checkAuth = async () => {
     try {
@@ -151,14 +164,18 @@ export default function Admin() {
   const isMaster = currentUser?.role === 'master';
   const isAdmin = currentUser?.role === 'admin' || isMaster;
 
+  // Admin-only users start on quotes tab (they can't see settings)
+  const defaultTab: TabId = isMaster ? 'settings' : 'quotes';
+  const [activeTab, setActiveTab] = useState<TabId>(defaultTab);
+
   const allTabs = [
-    { id: 'settings', label: 'Geral', icon: Settings, show: true },
-    { id: 'services', label: 'Serviços', icon: Hammer, show: true },
-    { id: 'posts', label: 'Blog', icon: FileText, show: true },
-    { id: 'gallery', label: 'Galeria', icon: LayoutGrid, show: true },
-    { id: 'testimonials', label: 'Depoimentos', icon: Star, show: true },
+    { id: 'settings', label: 'Geral', icon: Settings, show: isMaster },
+    { id: 'services', label: 'Serviços', icon: Hammer, show: isMaster },
+    { id: 'posts', label: 'Blog', icon: FileText, show: isMaster },
+    { id: 'gallery', label: 'Galeria', icon: LayoutGrid, show: isMaster },
+    { id: 'testimonials', label: 'Depoimentos', icon: Star, show: isMaster },
     { id: 'users', label: 'Usuários', icon: Users, show: isAdmin },
-    { id: 'quotes', label: 'Orçamentos', icon: ClipboardList, show: isAdmin },
+    { id: 'quotes', label: 'Orçamentos', icon: ClipboardList, show: isAdmin, badge: pendingCount },
     { id: 'inventory', label: 'Estoque', icon: Package, show: isAdmin },
     { id: 'financial', label: 'Financeiro', icon: TrendingUp, show: isMaster },
   ].filter(t => t.show);
@@ -191,14 +208,20 @@ export default function Admin() {
                 <p className="text-xs text-slate-500 mt-1 truncate">{currentUser?.name || currentUser?.username}</p>
               </div>
               <nav className="space-y-1">
-                {allTabs.map(tab => (
+                {allTabs.map((tab: any) => (
                   <button key={tab.id} onClick={() => setActiveTab(tab.id as TabId)}
                     className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-bold transition-all cursor-pointer
                       ${activeTab === tab.id ? 'bg-brand-primary text-white shadow-lg shadow-brand-primary/20' : 'text-slate-600 hover:bg-slate-50'}`}>
                     <tab.icon className="w-4 h-4" />
-                    {tab.label}
+                    <span className="flex-1 text-left">{tab.label}</span>
+                    {tab.badge > 0 && (
+                      <span className={`text-xs font-black px-2 py-0.5 rounded-full ${activeTab === tab.id ? 'bg-white text-brand-primary' : 'bg-orange-500 text-white'}`}>
+                        {tab.badge}
+                      </span>
+                    )}
                   </button>
                 ))}
+
                 <div className="pt-4 mt-4 border-t border-slate-100">
                   <button onClick={handleLogout}
                     className="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-bold text-red-500 hover:bg-red-50 transition-all cursor-pointer">

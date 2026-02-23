@@ -277,7 +277,7 @@ app.get('/api/settings', async (_req, res) => {
   res.json(obj);
 });
 
-app.post('/api/settings', requireAdmin, upload.fields([{ name: 'logo' }, { name: 'heroImage' }, { name: 'pixQrCode' }]), async (req, res) => {
+app.post('/api/settings', requireMaster, upload.fields([{ name: 'logo' }, { name: 'heroImage' }, { name: 'pixQrCode' }]), async (req, res) => {
   const files = req.files as { [fieldname: string]: Express.Multer.File[] };
   const settings = req.body;
 
@@ -472,6 +472,12 @@ app.post('/api/testimonials/delete/:id', requireAdmin, async (req, res) => {
 // =====================
 // QUOTES Routes
 // =====================
+// Pending count — for badge in admin sidebar
+app.get('/api/quotes/pending-count', requireAdmin, async (_req, res) => {
+  const { count } = await supabase.from('quotes').select('id', { count: 'exact', head: true }).eq('status', 'pending');
+  res.json({ count: count || 0 });
+});
+
 app.get('/api/quotes', authenticate, async (req: any, res) => {
   let query = supabase.from('quotes').select('*').order('createdAt', { ascending: false });
   // Regular users only see their own quotes
@@ -482,7 +488,7 @@ app.get('/api/quotes', authenticate, async (req: any, res) => {
 });
 
 app.post('/api/quotes', authenticate, async (req: any, res) => {
-  const { clientName, bends, notes } = req.body;
+  const { clientName, bends, notes, totalValue: passedTotalValue, adminCreated } = req.body;
 
   // Calculate totals from bends
   let totalM2 = 0;
@@ -495,7 +501,9 @@ app.post('/api/quotes', authenticate, async (req: any, res) => {
   const { data: settings } = await supabase.from('settings').select('*');
   const settingsObj = (settings || []).reduce((acc: any, s: any) => ({ ...acc, [s.key]: s.value }), {});
   const pricePerM2 = parseFloat(settingsObj.pricePerM2 || '50');
-  const totalValue = totalM2 * pricePerM2;
+
+  // Admin manual creation can pass totalValue directly
+  const totalValue = adminCreated && passedTotalValue ? parseFloat(passedTotalValue) : totalM2 * pricePerM2;
 
   const { data: quote, error: qError } = await supabase.from('quotes').insert({
     clientId: req.user.id,

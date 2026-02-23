@@ -3,19 +3,35 @@ import { useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'motion/react';
 import {
     Plus, Trash2, ChevronRight, ChevronLeft, Check, AlertTriangle,
-    Download, Printer, Copy, Send, RefreshCw, Undo2, Eye
+    Download, Printer, Copy, Send, RefreshCw, Undo2, Eye, FileDown
 } from 'lucide-react';
 import BendCanvas, { Risk, RiskDirection, DIRECTION_LABELS, DIRECTION_ICONS } from '../components/BendCanvas';
 
-// ───────────────────────────── Rounding Rule ─────────────────────────────
-// Round to nearest multiple of 5 with special rule:
-// if exactly divisible by 5 → keep; else round UP to next multiple of 5
-// Exception: if fraction part is ≤ 0 (exactly 0) → go down (commercial rule)
+// ─────────────────── Regra de Arredondamento (do prompt) ──────────────────
+// Regra:
+//   - valor INTEIRO → arredondamento comercial para múltiplo de 5 mais próximo
+//     (metade vai para BAIXO: 22.5→20, 27.5→25)
+//   - valor com DECIMAL → sempre arredonda para CIMA até o próximo múltiplo de 5
+//
+// Tabela esperada:
+//   21    → 20   (inteiro, mais perto de 20)
+//   21.01 → 25   (decimal, sobe)
+//   23    → 25   (inteiro, mais perto de 25)
+//   26    → 25   (inteiro, mais perto de 25)
+//   26.01 → 30   (decimal, sobe)
+//   36    → 35   (inteiro, mais perto de 35)
+//   36.75 → 40   (decimal, sobe)
+//   11.05 → 15   (decimal, sobe)
 function roundToMultipleOf5(value: number): number {
     if (value <= 0) return 5;
-    const r = value % 5;
-    if (r === 0) return value;          // exact multiple stays
-    return value - r + 5;              // always round UP to next multiple of 5
+    const isWholeNumber = value === Math.floor(value);
+    if (isWholeNumber) {
+        // Arredondamento padrão para múltiplo de 5 mais próximo
+        return Math.round(value / 5) * 5 || 5;
+    } else {
+        // Se tem decimal: sempre sobe para o próximo múltiplo de 5
+        return Math.ceil(value / 5) * 5;
+    }
 }
 
 // ─────────────────────────── Types ───────────────────────────────────────
@@ -243,6 +259,52 @@ export default function Orcamento() {
 
     // ── Print ──
     const handlePrint = () => window.print();
+
+    // ── PDF Download ──
+    const handleDownloadPDF = () => {
+        const rows = bends.map((b, i) => `
+            <tr>
+                <td>#${i + 1}</td>
+                <td>${b.risks.map(r => `${DIRECTION_ICONS[r.direction]} ${r.sizeCm}cm`).join(', ')}</td>
+                <td>${b.totalWidthCm.toFixed(1)} → <strong>${b.roundedWidthCm}cm</strong></td>
+                <td>${b.lengths.filter(l => parseFloat(l) > 0).join(' + ')} = ${b.totalLengthM.toFixed(2)}m</td>
+                <td>${b.m2.toFixed(4)}</td>
+                <td>R$ ${(b.m2 * pricePerM2).toFixed(2)}</td>
+            </tr>
+        `).join('');
+        const html = `<!DOCTYPE html><html lang="pt-BR"><head>
+            <meta charset="UTF-8"><title>Orçamento Ferreira Calhas</title>
+            <style>
+                body{font-family:Arial,sans-serif;padding:32px;color:#111;max-width:800px;margin:auto}
+                h1{font-size:22px;margin-bottom:4px}h2{font-size:14px;color:#555;font-weight:normal;margin:0}
+                table{width:100%;border-collapse:collapse;margin-top:24px;font-size:13px}
+                th{background:#1e293b;color:#fff;text-align:left;padding:10px 8px}
+                td{padding:9px 8px;border-bottom:1px solid #e8e8e8}
+                tr:nth-child(even) td{background:#f8fafc}
+                .total-row td{border-top:2px solid #1e293b;font-weight:bold;font-size:15px}
+                .value{font-size:28px;font-weight:900;color:#16a34a;margin-top:16px}
+                .meta{margin-top:8px;font-size:12px;color:#777}
+                @media print{body{padding:16px}}
+            </style></head><body>
+            <h1>Orçamento — Ferreira Calhas</h1>
+            <h2>${new Date().toLocaleDateString('pt-BR', { day: '2-digit', month: 'long', year: 'numeric' })}</h2>
+            <p class="meta">Cliente: <strong>${user?.name || user?.username || ''}</strong>${notes ? ' &nbsp;|&nbsp; Obs: ' + notes : ''}</p>
+            <table>
+                <thead><tr><th>#</th><th>Riscos</th><th>Largura</th><th>Metros corridos</th><th>m²</th><th>Valor</th></tr></thead>
+                <tbody>${rows}</tbody>
+                <tfoot>
+                    <tr><td colspan="4" style="text-align:right;padding-top:16px">Total m²:</td><td colspan="2"><strong>${totalM2.toFixed(4)} m²</strong></td></tr>
+                    <tr><td colspan="4" style="text-align:right">Valor por m²:</td><td colspan="2">R$ ${pricePerM2.toFixed(2)}</td></tr>
+                    <tr class="total-row"><td colspan="4" style="text-align:right">TOTAL A PAGAR:</td><td colspan="2" style="color:#16a34a;font-size:18px">R$ ${totalValue.toFixed(2)}</td></tr>
+                </tfoot>
+            </table>
+            <script>window.onload=()=>window.print();<\/script>
+        </body></html>`;
+        const blob = new Blob([html], { type: 'text/html' });
+        const url = URL.createObjectURL(blob);
+        const win = window.open(url, '_blank');
+        if (win) setTimeout(() => URL.revokeObjectURL(url), 10000);
+    };
 
     // ══════════════════════════════ RENDER ══════════════════════════════════
     return (
@@ -602,6 +664,10 @@ export default function Orcamento() {
                                     className="px-5 py-3 bg-white/10 hover:bg-white/20 text-white rounded-2xl flex items-center gap-2 font-bold transition-all cursor-pointer">
                                     <Printer className="w-4 h-4" /> Imprimir
                                 </button>
+                                <button onClick={handleDownloadPDF}
+                                    className="px-5 py-3 bg-white/10 hover:bg-white/20 text-white rounded-2xl flex items-center gap-2 font-bold transition-all cursor-pointer">
+                                    <FileDown className="w-4 h-4" /> Baixar PDF
+                                </button>
                             </div>
                             <button onClick={handleSubmit} disabled={submitting}
                                 className="px-8 py-3 bg-green-500 hover:bg-green-400 disabled:opacity-50 text-white font-black rounded-2xl flex items-center gap-2 transition-all cursor-pointer text-lg">
@@ -694,10 +760,16 @@ export default function Orcamento() {
                         </div>
 
                         <div className="flex flex-wrap gap-3 justify-between">
-                            <button onClick={handlePrint}
-                                className="px-5 py-3 bg-white/10 hover:bg-white/20 text-white rounded-2xl flex items-center gap-2 font-bold transition-all cursor-pointer">
-                                <Printer className="w-4 h-4" /> Imprimir Orçamento
-                            </button>
+                            <div className="flex gap-3 flex-wrap">
+                                <button onClick={handlePrint}
+                                    className="px-5 py-3 bg-white/10 hover:bg-white/20 text-white rounded-2xl flex items-center gap-2 font-bold transition-all cursor-pointer">
+                                    <Printer className="w-4 h-4" /> Imprimir
+                                </button>
+                                <button onClick={handleDownloadPDF}
+                                    className="px-5 py-3 bg-white/10 hover:bg-white/20 text-white rounded-2xl flex items-center gap-2 font-bold transition-all cursor-pointer">
+                                    <FileDown className="w-4 h-4" /> Baixar PDF
+                                </button>
+                            </div>
                             <button onClick={() => { setBends([]); setStep('bends'); setSavedQuote(null); setNotes(''); }}
                                 className="px-5 py-3 bg-white/10 hover:bg-white/20 text-white rounded-2xl flex items-center gap-2 font-bold transition-all cursor-pointer">
                                 <Plus className="w-4 h-4" /> Novo Orçamento
