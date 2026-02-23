@@ -1,5 +1,10 @@
 import React, { useState, useEffect } from 'react';
-import { Eye, Check, X, Package, ChevronDown, Percent, PenLine, ZoomIn, RefreshCw, RotateCcw } from 'lucide-react';
+import { Eye, Check, X, Package, ChevronDown, Percent, PenLine, ZoomIn, RefreshCw, RotateCcw, FileDown } from 'lucide-react';
+
+const DIRECTION_ICONS: Record<string, string> = {
+    left: '←', right: '→', up: '↑', down: '↓',
+    upLeft: '↖', upRight: '↗', downLeft: '↙', downRight: '↘',
+};
 
 const STATUS_CONFIG: Record<string, { label: string; color: string }> = {
     rascunho: { label: 'Rascunho', color: 'bg-slate-100 text-slate-500' },
@@ -42,6 +47,50 @@ export default function QuotesTab({ quotes, currentUser, onSave, showToast }: Pr
 
     const isAdminOrMaster = currentUser?.role === 'admin' || currentUser?.role === 'master';
     const isMaster = currentUser?.role === 'master';
+
+    const handleDownloadPDF = (q: any, qBends: any[]) => {
+        const imgRows = qBends.map((b: any, i: number) => b.svgDataUrl
+            ? `<div style="margin:12px 0;page-break-inside:avoid"><p style="font-weight:bold;margin:0;font-size:14px">Dobra #${i + 1} — <span class="medida">${((b.roundedWidthCm || 0) / 100).toFixed(2)}m larg.</span></p><img src="${b.svgDataUrl}" style="width:100%;max-height:180px;object-fit:contain;background:#1e293b;border-radius:8px"/></div>` : '').join('');
+        const rows = qBends.map((b: any, i: number) => {
+            const lengths = Array.isArray(b.lengths) ? b.lengths : [];
+            const totalLen = b.totalLengthM || lengths.filter((l: any) => parseFloat(l) > 0).reduce((a: number, c: any) => a + parseFloat(c), 0);
+            const w = b.roundedWidthCm || 0;
+            const m2 = b.m2 || (w / 100 * totalLen);
+            return `<tr><td>#${i + 1}</td><td>${(b.risks || []).map((r: any) => `${DIRECTION_ICONS[r.direction] || ''} ${r.sizeCm}cm`).join(', ')}</td><td class="medida">${(w / 100).toFixed(2)}m</td><td class="metros">${lengths.filter((l: any) => parseFloat(l) > 0).join('+')}=${totalLen.toFixed(2)}m</td><td>${m2.toFixed(4)}</td><td>R$${(m2 * 115).toFixed(2)}</td></tr>`;
+        }).join('');
+        const tM2 = parseFloat(q.totalM2 || 0);
+        const tVal = parseFloat(q.finalValue || q.totalValue || 0);
+        const stLabel = (STATUS_CONFIG[q.status]?.label || q.status).toUpperCase();
+        const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Orçamento #${q.id}</title><style>
+body{font-family:Arial,sans-serif;padding:24px;color:#111;max-width:900px;margin:auto}
+h1{font-size:20px;margin-bottom:4px}
+.status{display:inline-block;background:#fef3c7;color:#92400e;border:2px solid #f59e0b;font-weight:bold;font-size:13px;padding:6px 14px;border-radius:8px;margin:8px 0}
+table{width:100%;border-collapse:collapse;margin-top:12px;font-size:13px}
+th{background:#1e293b;color:#fff;text-align:left;padding:10px}
+td{padding:8px;border-bottom:1px solid #e8e8e8}
+tr:nth-child(even) td{background:#f8fafc}
+.big{font-size:18px;font-weight:bold;color:#16a34a}
+.metros{font-size:16px;font-weight:bold;background:#eef2ff;border:2px solid #6366f1;padding:6px 12px;border-radius:6px;color:#4338ca}
+.medida{font-size:14px;font-weight:bold;color:#1e40af}
+@media print{body{padding:8px}}
+</style></head><body>
+<h1>Orçamento — Ferreira Calhas</h1>
+<p style="color:#555;font-size:12px">${new Date(q.createdAt).toLocaleDateString('pt-BR', { day: '2-digit', month: 'long', year: 'numeric' })}</p>
+<p>Cliente: <b>${q.clientName || ''}</b>${q.notes ? ` | Obs: ${q.notes}` : ''}</p>
+<div class="status">⏳ STATUS: ${stLabel}</div>
+${imgRows}
+<table><thead><tr><th>#</th><th>Riscos</th><th>Largura</th><th style="background:#4338ca">Metros corridos</th><th>m²</th><th>Valor</th></tr></thead><tbody>${rows}</tbody>
+<tfoot>
+<tr><td colspan="4" align="right">Total m²:</td><td colspan="2"><b>${tM2.toFixed(4)} m²</b></td></tr>
+<tr><td colspan="4" align="right" style="font-weight:bold">TOTAL A PAGAR:</td><td colspan="2" class="big">R$ ${tVal.toFixed(2)}</td></tr>
+</tfoot></table>
+<script>window.onload=()=>window.print();<\/script>
+</body></html>`;
+        const b2 = new Blob([html], { type: 'text/html' });
+        const url = URL.createObjectURL(b2);
+        const w = window.open(url, '_blank');
+        if (w) setTimeout(() => URL.revokeObjectURL(url), 10000);
+    };
 
     // Load bends when a quote is expanded
     useEffect(() => {
@@ -279,6 +328,10 @@ export default function QuotesTab({ quotes, currentUser, onSave, showToast }: Pr
                                                 <Eye className="w-4 h-4" /> Ver Comprovante PIX
                                             </a>
                                         )}
+                                        <button onClick={() => handleDownloadPDF(q, bends)}
+                                            className="flex items-center gap-2 text-sm font-bold text-indigo-600 bg-indigo-50 px-4 py-2 rounded-xl cursor-pointer hover:bg-indigo-100">
+                                            <FileDown className="w-4 h-4" /> Baixar PDF
+                                        </button>
                                         {q.discountValue > 0 && (
                                             <p className="text-slate-500">Desconto: <span className="text-red-500 font-bold">-R$ {parseFloat(q.discountValue).toFixed(2)}</span></p>
                                         )}

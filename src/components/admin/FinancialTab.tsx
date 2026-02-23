@@ -41,7 +41,12 @@ export default function FinancialTab({ showToast }: Props) {
 
     return (
         <div className="space-y-6 animate-in fade-in duration-300">
-            <h2 className="text-2xl font-bold">Fluxo Financeiro</h2>
+            <div className="flex justify-between items-center">
+                <h2 className="text-2xl font-bold">Fluxo Financeiro</h2>
+                <button onClick={fetchData} className="px-4 py-2 bg-brand-primary text-white rounded-xl font-bold text-sm cursor-pointer hover:opacity-90 flex items-center gap-2">
+                    <BarChart2 className="w-4 h-4" /> Atualizar
+                </button>
+            </div>
 
             {loading ? (
                 <div className="flex justify-center py-16"><div className="w-8 h-8 border-4 border-brand-primary border-t-transparent rounded-full animate-spin" /></div>
