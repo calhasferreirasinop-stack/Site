@@ -487,7 +487,7 @@ app.put('/api/quotes/:id/status', authenticate as any, async (req: any, res) => 
                 quoteId: id, clientName: quote.clientName,
                 grossValue: quote.totalValue, discountValue: quote.discountValue || 0,
                 netValue: quote.finalValue || quote.totalValue, paymentMethod: 'pix',
-                status: 'aguardando_pagamento',
+                status: 'aguardando_pagamento', paidAt: new Date().toISOString(),
                 createdAt: new Date().toISOString(), confirmedBy: req.user.id,
             });
         }
@@ -628,10 +628,14 @@ app.post('/api/pix-keys', requireMaster as any, async (req, res) => {
         if (f) qrCodeUrl = await uploadToStorage(f.buffer, f.originalname, f.mimetype);
     } else {
         ({ label, pixKey, pixCode } = req.body || {});
+        qrCodeUrl = req.body?.qrCodeUrl || null;
     }
     const { data, error } = await supabase.from('pix_keys').insert({
         label: label || '', pixKey: pixKey || '', pixCode: pixCode || '',
         qrCodeUrl: qrCodeUrl || '', active: true,
+        keyType: req.body?.keyType || 'cpf',
+        bank: req.body?.bank || '',
+        beneficiary: req.body?.beneficiary || '',
     }).select().single();
     if (error) return res.status(500).json({ error: error.message });
     res.json(data);
@@ -650,8 +654,8 @@ app.put('/api/pix-keys/:id', requireMaster as any, async (req: any, res) => {
         const f = files.find(x => x.fieldname === 'qrCode');
         if (f) updateData.qrCodeUrl = await uploadToStorage(f.buffer, f.originalname, f.mimetype);
     } else {
-        const { label, pixKey, pixCode, active, sortOrder } = req.body || {};
-        updateData = { label, pixKey, pixCode, active, sortOrder };
+        const { label, pixKey, pixCode, active, sortOrder, keyType, bank, beneficiary, qrCodeUrl } = req.body || {};
+        updateData = { label, pixKey, pixCode, active, sortOrder, keyType, bank, beneficiary, qrCodeUrl };
     }
     const { data, error } = await supabase.from('pix_keys').update(updateData).eq('id', id).select().single();
     if (error) return res.status(500).json({ error: error.message });

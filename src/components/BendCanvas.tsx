@@ -81,9 +81,11 @@ interface BendCanvasProps {
     risks: Risk[];
     maxWidthCm?: number;
     svgRef?: React.RefObject<SVGSVGElement>;
+    /** When true, hides edit markers (circles, start label, grid, info bar) for clean export */
+    exportMode?: boolean;
 }
 
-export default function BendCanvas({ risks, maxWidthCm = 120, svgRef }: BendCanvasProps) {
+export default function BendCanvas({ risks, maxWidthCm = 120, svgRef, exportMode = false }: BendCanvasProps) {
     const points = useMemo(() => computePath(risks), [risks]);
     const totalWidthCm = risks.reduce((sum, r) => sum + r.sizeCm, 0);
     const isOverLimit = totalWidthCm > maxWidthCm;
@@ -120,12 +122,13 @@ export default function BendCanvas({ risks, maxWidthCm = 120, svgRef }: BendCanv
         ? scaled.map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.x.toFixed(1)} ${p.y.toFixed(1)}`).join(' ')
         : '';
 
-    const strokeColor = isOverLimit ? '#ef4444' : '#63b3ed';
-    const glowFilter = isOverLimit ? 'drop-shadow(0 0 6px #ef4444)' : 'drop-shadow(0 0 8px #63b3ed88)';
+    // In export mode, always use blue (not red) for a clean look
+    const strokeColor = exportMode ? '#63b3ed' : (isOverLimit ? '#ef4444' : '#63b3ed');
+    const glowFilter = exportMode ? 'none' : (isOverLimit ? 'drop-shadow(0 0 6px #ef4444)' : 'drop-shadow(0 0 8px #63b3ed88)');
 
     return (
         <div className="relative w-full">
-            <div className={`rounded-2xl border-2 overflow-hidden transition-all duration-300 bg-gradient-to-br from-slate-900 to-slate-800 ${isOverLimit ? 'border-red-500' : 'border-slate-700'}`}>
+            <div className={`rounded-2xl border-2 overflow-hidden transition-all duration-300 bg-gradient-to-br from-slate-900 to-slate-800 ${exportMode ? 'border-slate-700' : (isOverLimit ? 'border-red-500' : 'border-slate-700')}`}>
                 <svg
                     ref={svgRef}
                     width="100%"
@@ -134,12 +137,12 @@ export default function BendCanvas({ risks, maxWidthCm = 120, svgRef }: BendCanv
                     style={{ minHeight: 160, maxHeight: 240 }}
                     xmlns="http://www.w3.org/2000/svg"
                 >
-                    {/* Subtle grid */}
-                    {Array.from({ length: 24 }).map((_, i) => (
+                    {/* Subtle grid — HIDDEN in export mode */}
+                    {!exportMode && Array.from({ length: 24 }).map((_, i) => (
                         <line key={`v${i}`} x1={i * 20} y1={0} x2={i * 20} y2={CANVAS_H}
                             stroke="rgba(255,255,255,0.035)" strokeWidth="1" />
                     ))}
-                    {Array.from({ length: 12 }).map((_, i) => (
+                    {!exportMode && Array.from({ length: 12 }).map((_, i) => (
                         <line key={`h${i}`} x1={0} y1={i * 20} x2={CANVAS_W} y2={i * 20}
                             stroke="rgba(255,255,255,0.035)" strokeWidth="1" />
                     ))}
@@ -147,7 +150,7 @@ export default function BendCanvas({ risks, maxWidthCm = 120, svgRef }: BendCanv
                     {/* Sheet shadow */}
                     {pathStr && (
                         <path d={pathStr} fill="none"
-                            stroke={isOverLimit ? 'rgba(239,68,68,0.18)' : 'rgba(99,179,237,0.18)'}
+                            stroke={exportMode ? 'rgba(99,179,237,0.15)' : (isOverLimit ? 'rgba(239,68,68,0.18)' : 'rgba(99,179,237,0.18)')}
                             strokeWidth={14} strokeLinecap="round" strokeLinejoin="round" />
                     )}
 
@@ -162,10 +165,18 @@ export default function BendCanvas({ risks, maxWidthCm = 120, svgRef }: BendCanv
                     {/* Points + dimension labels */}
                     {scaled.map((pt, i) => (
                         <g key={i}>
-                            <circle cx={pt.x} cy={pt.y} r={i === 0 ? 7 : 5}
-                                fill={i === 0 ? '#48bb78' : strokeColor}
-                                stroke="white" strokeWidth="2" />
-                            {/* Mid-segment label */}
+                            {/* Circles — HIDDEN in export mode */}
+                            {!exportMode && (
+                                <circle cx={pt.x} cy={pt.y} r={i === 0 ? 7 : 5}
+                                    fill={i === 0 ? '#48bb78' : strokeColor}
+                                    stroke="white" strokeWidth="2" />
+                            )}
+                            {/* Small corner dots in export mode for reference */}
+                            {exportMode && i > 0 && i < scaled.length - 1 && (
+                                <circle cx={pt.x} cy={pt.y} r={2}
+                                    fill="rgba(255,255,255,0.4)" />
+                            )}
+                            {/* Mid-segment label — ALWAYS shown */}
                             {i > 0 && risks[i - 1] && (() => {
                                 const prev = scaled[i - 1];
                                 const mx = (prev.x + pt.x) / 2;
@@ -178,7 +189,7 @@ export default function BendCanvas({ risks, maxWidthCm = 120, svgRef }: BendCanv
                                 const ny = dx / len * 14;
                                 return (
                                     <text x={mx + nx} y={my + ny} textAnchor="middle"
-                                        fill="rgba(255,255,255,0.85)" fontSize="10" fontWeight="bold"
+                                        fill="rgba(255,255,255,0.85)" fontSize={exportMode ? "11" : "10"} fontWeight="bold"
                                         style={{ paintOrder: 'stroke', stroke: '#1e293b', strokeWidth: 3 }}>
                                         {risks[i - 1].sizeCm}cm
                                     </text>
@@ -187,8 +198,8 @@ export default function BendCanvas({ risks, maxWidthCm = 120, svgRef }: BendCanv
                         </g>
                     ))}
 
-                    {/* Start label */}
-                    {scaled.length > 0 && (
+                    {/* Start label — HIDDEN in export mode */}
+                    {!exportMode && scaled.length > 0 && (
                         <text x={scaled[0].x} y={scaled[0].y - 14} textAnchor="middle"
                             fill="#48bb78" fontSize="9" fontWeight="bold">INÍCIO</text>
                     )}
@@ -202,15 +213,17 @@ export default function BendCanvas({ risks, maxWidthCm = 120, svgRef }: BendCanv
                     )}
                 </svg>
 
-                {/* Bottom info bar */}
-                <div className="absolute bottom-2 left-3 right-3 flex justify-between items-center pointer-events-none">
-                    <div className={`text-xs font-bold px-2.5 py-1 rounded-full ${isOverLimit ? 'bg-red-500 text-white' : 'bg-white/10 text-white/70'}`}>
-                        {totalWidthCm.toFixed(1)} / {maxWidthCm} cm
+                {/* Bottom info bar — HIDDEN in export mode */}
+                {!exportMode && (
+                    <div className="absolute bottom-2 left-3 right-3 flex justify-between items-center pointer-events-none">
+                        <div className={`text-xs font-bold px-2.5 py-1 rounded-full ${isOverLimit ? 'bg-red-500 text-white' : 'bg-white/10 text-white/70'}`}>
+                            {totalWidthCm.toFixed(1)} / {maxWidthCm} cm
+                        </div>
+                        {isOverLimit && (
+                            <div className="text-red-400 text-xs font-bold animate-pulse">⚠ Excede chapa!</div>
+                        )}
                     </div>
-                    {isOverLimit && (
-                        <div className="text-red-400 text-xs font-bold animate-pulse">⚠ Excede chapa!</div>
-                    )}
-                </div>
+                )}
             </div>
         </div>
     );

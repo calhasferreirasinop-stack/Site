@@ -50,7 +50,20 @@ function calcM2(roundedWidthCm: number, lengths: string[]) {
 async function captureSvg(el: SVGSVGElement): Promise<string> {
     return new Promise(resolve => {
         try {
-            const blob = new Blob([new XMLSerializer().serializeToString(el)], { type: 'image/svg+xml;charset=utf-8' });
+            // Clone SVG and remove edit-mode elements (circles, INÍCIO label)
+            const clone = el.cloneNode(true) as SVGSVGElement;
+            clone.querySelectorAll('circle').forEach(c => c.remove());
+            // Remove INÍCIO text and info bar text
+            clone.querySelectorAll('text').forEach(t => {
+                const txt = t.textContent?.trim() || '';
+                if (txt === 'INÍCIO' || txt.includes('Adicione riscos')) t.remove();
+            });
+            // Remove grid lines (very faint ones)
+            clone.querySelectorAll('line').forEach(l => {
+                const s = l.getAttribute('stroke') || '';
+                if (s.includes('0.035')) l.remove();
+            });
+            const blob = new Blob([new XMLSerializer().serializeToString(clone)], { type: 'image/svg+xml;charset=utf-8' });
             const url = URL.createObjectURL(blob);
             const img = new Image();
             img.onload = () => {
@@ -871,8 +884,7 @@ ${imgRows}
                         <div className="flex flex-wrap gap-3 justify-between">
                             <div className="flex gap-3 flex-wrap">
                                 <button onClick={() => setStep('bends')} className="px-5 py-3 bg-white/10 hover:bg-white/20 text-white rounded-2xl flex items-center gap-2 font-bold cursor-pointer"><ChevronLeft className="w-4 h-4" /> Voltar</button>
-                                <button onClick={() => window.print()} className="px-5 py-3 bg-white/10 hover:bg-white/20 text-white rounded-2xl flex items-center gap-2 font-bold cursor-pointer"><Printer className="w-4 h-4" /> Imprimir</button>
-                                <button onClick={handleDownloadPDF} className="px-5 py-3 bg-white/10 hover:bg-white/20 text-white rounded-2xl flex items-center gap-2 font-bold cursor-pointer"><FileDown className="w-4 h-4" /> Baixar PDF</button>
+                                <button onClick={handleDownloadPDF} className="px-5 py-3 bg-white/10 hover:bg-white/20 text-white rounded-2xl flex items-center gap-2 font-bold cursor-pointer"><Printer className="w-4 h-4" /> Imprimir / PDF</button>
                             </div>
                             <button onClick={handleSubmit} disabled={submitting}
                                 className="px-8 py-3 bg-green-500 hover:bg-green-400 disabled:opacity-50 text-white font-black rounded-2xl flex items-center gap-2 cursor-pointer text-lg">
@@ -962,11 +974,14 @@ ${imgRows}
                             )}
                         </div>
                         <div className="flex flex-wrap gap-3 justify-between">
-                            <div className="flex gap-3">
-                                <button onClick={() => window.print()} className="px-5 py-3 bg-white/10 hover:bg-white/20 text-white rounded-2xl flex items-center gap-2 font-bold cursor-pointer"><Printer className="w-4 h-4" /> Imprimir</button>
-                                <button onClick={handleDownloadPDF} className="px-5 py-3 bg-white/10 hover:bg-white/20 text-white rounded-2xl flex items-center gap-2 font-bold cursor-pointer"><FileDown className="w-4 h-4" /> Baixar PDF</button>
+                            <div className="flex gap-3 flex-wrap">
+                                <button onClick={handleDownloadPDF} className="px-5 py-3 bg-white/10 hover:bg-white/20 text-white rounded-2xl flex items-center gap-2 font-bold cursor-pointer"><Printer className="w-4 h-4" /> Imprimir / PDF</button>
+                                <button onClick={() => { setBends([]); setStep('bends'); setSavedQuote(null); setNotes(''); setClientName(''); setShowPostConfirm(false); setShowMyQuotes(true); fetch('/api/quotes', { credentials: 'include' }).then(r => r.json()).then(setMyQuotes).catch(() => { }); }}
+                                    className="px-5 py-3 bg-blue-500 hover:bg-blue-400 text-white rounded-2xl flex items-center gap-2 font-bold cursor-pointer">
+                                    <List className="w-4 h-4" /> Ir para Listagem
+                                </button>
                             </div>
-                            <button onClick={() => { setBends([]); setStep('bends'); setSavedQuote(null); setNotes(''); setShowPostConfirm(false); }}
+                            <button onClick={() => { setBends([]); setStep('bends'); setSavedQuote(null); setNotes(''); setClientName(''); setShowPostConfirm(false); }}
                                 className="px-5 py-3 bg-white/10 hover:bg-white/20 text-white rounded-2xl flex items-center gap-2 font-bold cursor-pointer">
                                 <Plus className="w-4 h-4" /> Novo Orçamento
                             </button>

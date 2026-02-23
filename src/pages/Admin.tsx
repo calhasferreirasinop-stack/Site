@@ -15,7 +15,6 @@ export default function Admin() {
   const [settings, setSettings] = useState<any>({});
   const [logoFile, setLogoFile] = useState<File | null>(null);
   const [heroFile, setHeroFile] = useState<File | null>(null);
-  const [pixQrFile, setPixQrFile] = useState<File | null>(null);
   const [services, setServices] = useState<any[]>([]);
   const [posts, setPosts] = useState<any[]>([]);
   const [gallery, setGallery] = useState<any[]>([]);
@@ -32,6 +31,9 @@ export default function Admin() {
   const [newGalleryItem, setNewGalleryItem] = useState({ description: '', serviceId: '', images: [] as File[] });
   const [selectedGalleryIds, setSelectedGalleryIds] = useState<number[]>([]);
   const [newTestimonial, setNewTestimonial] = useState({ author: '', content: '', rating: 5 });
+  const [pixKeys, setPixKeys] = useState<any[]>([]);
+  const [newPix, setNewPix] = useState({ label: '', pixKey: '', keyType: 'cpf', bank: '', beneficiary: '', pixCode: '', qrCodeUrl: '' });
+  const [pixQrFile, setPixQrFile] = useState<File | null>(null);
   const [toast, setToast] = useState<{ show: boolean; message: string; type: 'success' | 'error' } | null>(null);
 
   useEffect(() => {
@@ -40,7 +42,33 @@ export default function Admin() {
 
   const showToast = (message: string, type: 'success' | 'error') => setToast({ show: true, message, type });
 
-  useEffect(() => { checkAuth(); }, []);
+  useEffect(() => { checkAuth(); fetchPixKeys(); }, []);
+
+  const fetchPixKeys = () => {
+    fetch('/api/pix-keys').then(r => r.json()).then(setPixKeys).catch(() => { });
+  };
+  const handleAddPix = async () => {
+    if (!newPix.pixKey) return showToast('Chave PIX obrigatória', 'error');
+    const res = await fetch('/api/pix-keys', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(newPix), credentials: 'include',
+    });
+    if (res.ok) { showToast('PIX adicionado!', 'success'); setNewPix({ label: '', pixKey: '', keyType: 'cpf', bank: '', beneficiary: '', pixCode: '', qrCodeUrl: '' }); fetchPixKeys(); }
+    else showToast('Erro ao adicionar PIX', 'error');
+  };
+  const handleDeletePix = async (id: number) => {
+    if (!confirm('Excluir esta chave PIX?')) return;
+    await fetch(`/api/pix-keys/${id}`, { method: 'DELETE', credentials: 'include' });
+    fetchPixKeys();
+    showToast('PIX removido', 'success');
+  };
+  const handleTogglePix = async (pk: any) => {
+    await fetch(`/api/pix-keys/${pk.id}`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...pk, active: !pk.active }), credentials: 'include',
+    });
+    fetchPixKeys();
+  };
 
   // Badge: poll pending quote count every 30s
   useEffect(() => {
@@ -110,11 +138,10 @@ export default function Admin() {
     });
     if (logoFile) fd.append('logo', logoFile);
     if (heroFile) fd.append('heroImage', heroFile);
-    if (pixQrFile) fd.append('pixQrCode', pixQrFile);
     const res = await fetch('/api/settings', { method: 'POST', body: fd, credentials: 'include' });
     if (res.status === 401) return navigate('/login');
     showToast('Configurações salvas!', 'success');
-    setLogoFile(null); setHeroFile(null); setPixQrFile(null);
+    setLogoFile(null); setHeroFile(null);
     fetchData(true);
   };
 
@@ -299,30 +326,73 @@ export default function Admin() {
                         className="text-xs text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-xs file:font-bold file:bg-brand-primary file:text-white cursor-pointer" />
                     </div>
 
-                    {/* PIX settings (master only) */}
+                    {/* PIX Management (master only) */}
                     {isMaster && (
                       <div className="p-6 bg-amber-50 border border-amber-200 rounded-2xl space-y-4">
-                        <h3 className="font-bold text-amber-800 flex items-center gap-2">💳 Configurações PIX</h3>
-                        <div>
-                          <label className="block text-sm font-bold text-amber-700 mb-2">Chave PIX</label>
-                          <input type="text" value={settings.pixKey || ''} onChange={e => setSettings({ ...settings, pixKey: e.target.value })}
-                            className={inputCls} placeholder="CPF, CNPJ, e-mail ou telefone" />
+                        <h3 className="font-bold text-amber-800 flex items-center gap-2">💳 Chaves PIX</h3>
+
+                        {/* Existing PIX keys */}
+                        {pixKeys.length > 0 && (
+                          <div className="space-y-2">
+                            {pixKeys.map(pk => (
+                              <div key={pk.id} className={`flex items-center gap-3 p-3 rounded-xl border ${pk.active ? 'bg-white border-amber-200' : 'bg-slate-100 border-slate-200 opacity-60'}`}>
+                                <div className="flex-1 min-w-0">
+                                  <p className="font-bold text-slate-900 text-sm">{pk.label || 'PIX'}</p>
+                                  <p className="text-xs text-slate-500 truncate">{pk.pixKey}</p>
+                                  {pk.bank && <p className="text-xs text-slate-400">{pk.bank} · {pk.beneficiary}</p>}
+                                </div>
+                                <button onClick={() => handleTogglePix(pk)}
+                                  className={`text-xs font-bold px-2 py-1 rounded-lg cursor-pointer ${pk.active ? 'bg-green-100 text-green-700' : 'bg-slate-200 text-slate-500'}`}>
+                                  {pk.active ? 'Ativo' : 'Inativo'}
+                                </button>
+                                <button onClick={() => handleDeletePix(pk.id)}
+                                  className="text-red-400 hover:text-red-600 cursor-pointer"><Trash2 className="w-4 h-4" /></button>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+
+                        {/* Add new PIX */}
+                        <div className="bg-white border border-amber-200 rounded-xl p-4 space-y-3">
+                          <p className="text-xs font-bold text-amber-700 uppercase">Adicionar nova chave PIX</p>
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                            <input type="text" placeholder="Nome/Apelido (ex: PIX Empresa)" value={newPix.label}
+                              onChange={e => setNewPix({ ...newPix, label: e.target.value })} className={inputCls} />
+                            <select value={newPix.keyType} onChange={e => setNewPix({ ...newPix, keyType: e.target.value })} className={inputCls}>
+                              <option value="cpf">CPF</option>
+                              <option value="cnpj">CNPJ</option>
+                              <option value="email">E-mail</option>
+                              <option value="telefone">Telefone</option>
+                              <option value="aleatoria">Chave Aleatória</option>
+                            </select>
+                            <input type="text" placeholder="Chave PIX *" value={newPix.pixKey}
+                              onChange={e => setNewPix({ ...newPix, pixKey: e.target.value })} className={inputCls} />
+                            <input type="text" placeholder="Banco (ex: Nubank)" value={newPix.bank}
+                              onChange={e => setNewPix({ ...newPix, bank: e.target.value })} className={inputCls} />
+                            <input type="text" placeholder="Nome do Beneficiário" value={newPix.beneficiary}
+                              onChange={e => setNewPix({ ...newPix, beneficiary: e.target.value })} className={inputCls} />
+                            <input type="text" placeholder="Código Copia-Cola (opcional)" value={newPix.pixCode}
+                              onChange={e => setNewPix({ ...newPix, pixCode: e.target.value })} className={inputCls} />
+                            <input type="text" placeholder="URL do QR Code (opcional)" value={newPix.qrCodeUrl}
+                              onChange={e => setNewPix({ ...newPix, qrCodeUrl: e.target.value })} className={inputCls} />
+                          </div>
+                          <button onClick={handleAddPix}
+                            className="px-4 py-2 bg-amber-600 text-white rounded-xl font-bold text-sm hover:bg-amber-700 cursor-pointer flex items-center gap-2">
+                            <Plus className="w-4 h-4" /> Adicionar PIX
+                          </button>
                         </div>
-                        <div>
-                          <label className="block text-sm font-bold text-amber-700 mb-2">Valor por m² (R$)</label>
-                          <input type="number" step="0.01" value={settings.pricePerM2 || ''} onChange={e => setSettings({ ...settings, pricePerM2: e.target.value })}
-                            className={inputCls} />
-                        </div>
-                        <div>
-                          <label className="block text-sm font-bold text-amber-700 mb-2">QR Code PIX (imagem)</label>
-                          {settings.pixQrCodeUrl && <img src={settings.pixQrCodeUrl} className="w-32 h-32 object-contain mb-2 bg-white p-2 rounded-xl border" />}
-                          <input type="file" accept="image/*" onChange={e => setPixQrFile(e.target.files?.[0] || null)}
-                            className="text-xs text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-xs file:font-bold file:bg-amber-600 file:text-white cursor-pointer" />
-                        </div>
-                        <div>
-                          <label className="block text-sm font-bold text-amber-700 mb-2">Alerta estoque baixo (m²)</label>
-                          <input type="number" value={settings.lowStockAlertM2 || ''} onChange={e => setSettings({ ...settings, lowStockAlertM2: e.target.value })}
-                            className={inputCls} />
+
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                          <div>
+                            <label className="block text-sm font-bold text-amber-700 mb-2">Valor por m² (R$)</label>
+                            <input type="number" step="0.01" value={settings.pricePerM2 || ''} onChange={e => setSettings({ ...settings, pricePerM2: e.target.value })}
+                              className={inputCls} />
+                          </div>
+                          <div>
+                            <label className="block text-sm font-bold text-amber-700 mb-2">Alerta estoque baixo (m²)</label>
+                            <input type="number" value={settings.lowStockAlertM2 || ''} onChange={e => setSettings({ ...settings, lowStockAlertM2: e.target.value })}
+                              className={inputCls} />
+                          </div>
                         </div>
                       </div>
                     )}
