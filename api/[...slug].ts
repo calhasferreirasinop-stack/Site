@@ -48,7 +48,7 @@ async function parseSession(req: express.Request): Promise<any | null> {
 function setSessionCookie(res: express.Response, userId: number) {
     const data = Buffer.from(JSON.stringify({ userId })).toString('base64');
     res.setHeader('Set-Cookie',
-        `session=${data}; HttpOnly; Secure; SameSite=None; Max-Age=${30 * 24 * 3600}; Path=/`
+        `session=${data}; HttpOnly; Secure; SameSite=Lax; Max-Age=${30 * 24 * 3600}; Path=/`
     );
 }
 
@@ -120,8 +120,8 @@ app.post('/api/login', async (req, res) => {
         setSessionCookie(res, user.id);
         // Also clear old cookie
         res.setHeader('Set-Cookie', [
-            `session=${Buffer.from(JSON.stringify({ userId: user.id })).toString('base64')}; HttpOnly; Secure; SameSite=None; Max-Age=${30 * 24 * 3600}; Path=/`,
-            'admin_session=; HttpOnly; Secure; SameSite=None; Max-Age=0; Path=/',
+            `session=${Buffer.from(JSON.stringify({ userId: user.id })).toString('base64')}; HttpOnly; Secure; SameSite=Lax; Max-Age=${30 * 24 * 3600}; Path=/`,
+            'admin_session=; HttpOnly; Secure; SameSite=Lax; Max-Age=0; Path=/',
         ]);
         return res.json({ success: true, role: user.role, name: user.name || user.username });
     }
@@ -130,8 +130,8 @@ app.post('/api/login', async (req, res) => {
 
 app.post('/api/logout', (_req, res) => {
     res.setHeader('Set-Cookie', [
-        'session=; HttpOnly; Secure; SameSite=None; Max-Age=0; Path=/',
-        'admin_session=; HttpOnly; Secure; SameSite=None; Max-Age=0; Path=/',
+        'session=; HttpOnly; Secure; SameSite=Lax; Max-Age=0; Path=/',
+        'admin_session=; HttpOnly; Secure; SameSite=Lax; Max-Age=0; Path=/',
     ]);
     res.json({ success: true });
 });

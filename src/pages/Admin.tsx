@@ -159,7 +159,8 @@ export default function Admin() {
     setSelectedGalleryIds([]); fetchData(true);
   };
 
-  if (loading) return (
+  const loading_final = loading;
+  if (loading_final) return (
     <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center gap-4">
       <div className="w-14 h-14 border-4 border-brand-primary border-t-transparent rounded-full animate-spin" />
       <p className="text-slate-500 font-semibold text-sm">Carregando painel…</p>
@@ -169,13 +170,6 @@ export default function Admin() {
   const isMaster = currentUser?.role === 'master';
   const isAdmin = currentUser?.role === 'admin' || isMaster;
 
-  // Redirect to best visible tab when user data first loads
-  useEffect(() => {
-    if (!currentUser) return;
-    if (isMaster && activeTab === 'quotes') setActiveTab('settings');
-    else if (!isMaster && !['users', 'quotes', 'inventory'].includes(activeTab)) setActiveTab('quotes');
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentUser?.id]);
 
   const allTabs = [
     { id: 'settings', label: 'Geral', icon: Settings, show: isMaster },
