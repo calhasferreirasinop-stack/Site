@@ -481,24 +481,42 @@ app.put('/api/quotes/:id/status', authenticate as any, async (req: any, res) => 
 
     // ── Financial: CREATE record on 'in_production' ──────────────────────
     if (status === 'in_production' && quote) {
-        const { data: existing } = await supabase.from('financial_records').select('id').eq('quoteId', id).single();
-        if (!existing) {
-            await supabase.from('financial_records').insert({
-                quoteId: id, clientName: quote.clientName,
-                grossValue: quote.totalValue, discountValue: quote.discountValue || 0,
-                netValue: quote.finalValue || quote.totalValue, paymentMethod: 'pix',
-                status: 'aguardando_pagamento', paidAt: new Date().toISOString(),
-                createdAt: new Date().toISOString(), confirmedBy: req.user.id,
-            });
-        }
+        try {
+            const { data: existing } = await supabase.from('financial_records').select('id').eq('quoteId', id).single();
+            if (!existing) {
+                const { error: finErr } = await supabase.from('financial_records').insert({
+                    quoteId: id, clientName: quote.clientName,
+                    grossValue: quote.totalValue, discountValue: quote.discountValue || 0,
+                    netValue: quote.finalValue || quote.totalValue, paymentMethod: 'pix',
+                    status: 'aguardando_pagamento', paidAt: new Date().toISOString(),
+                    createdAt: new Date().toISOString(), confirmedBy: req.user.id,
+                });
+                if (finErr) console.error('[FINANCIAL] Error creating record:', finErr.message);
+            }
+        } catch (e: any) { console.error('[FINANCIAL] Exception on in_production:', e.message); }
     }
 
-    // ── Financial: UPDATE record on 'paid' ───────────────────────────────
-    if (status === 'paid') {
-        await supabase.from('financial_records').update({
-            status: 'pago', paidAt: new Date().toISOString(),
-            netValue: quote?.finalValue || quote?.totalValue,
-        }).eq('quoteId', id);
+    // ── Financial: CREATE or UPDATE record on 'paid' ─────────────────────
+    if (status === 'paid' && quote) {
+        try {
+            const { data: existing } = await supabase.from('financial_records').select('id').eq('quoteId', id).single();
+            if (existing) {
+                await supabase.from('financial_records').update({
+                    status: 'pago', paidAt: new Date().toISOString(),
+                    netValue: quote.finalValue || quote.totalValue,
+                }).eq('quoteId', id);
+            } else {
+                // Direct to paid without going through in_production
+                const { error: finErr } = await supabase.from('financial_records').insert({
+                    quoteId: id, clientName: quote.clientName,
+                    grossValue: quote.totalValue, discountValue: quote.discountValue || 0,
+                    netValue: quote.finalValue || quote.totalValue, paymentMethod: 'pix',
+                    status: 'pago', paidAt: new Date().toISOString(),
+                    createdAt: new Date().toISOString(), confirmedBy: req.user.id,
+                });
+                if (finErr) console.error('[FINANCIAL] Error creating paid record:', finErr.message);
+            }
+        } catch (e: any) { console.error('[FINANCIAL] Exception on paid:', e.message); }
     }
 
     // ── Financial: REMOVE record on reopen (pending) or cancel ───────────

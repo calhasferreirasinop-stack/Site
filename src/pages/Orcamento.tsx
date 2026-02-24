@@ -372,8 +372,12 @@ export default function Orcamento() {
 
     const handleDownloadQuotePDF = (q: any, qBends: any[]) => {
         const pm2 = parseFloat(settings.pricePerM2 || '50');
-        const imgRows = qBends.map((b: any, i: number) => b.svgDataUrl
-            ? `<div style="margin:12px 0;page-break-inside:avoid"><p style="font-weight:bold;margin:0;font-size:14px">Dobra #${i + 1} — <span class="medida">${((b.roundedWidthCm || 0) / 100).toFixed(2)}m larg.</span></p><img src="${b.svgDataUrl}" style="width:100%;max-height:180px;object-fit:contain;background:#1e293b;border-radius:8px"/></div>` : '').join('');
+        const imgRows = qBends.map((b: any, i: number) => {
+            const cuts = Array.isArray(b.lengths) ? b.lengths.filter((l: any) => parseFloat(l) > 0) : [];
+            const cutsHtml = cuts.length > 0 ? `<table class="cuts-table"><thead><tr><th colspan="2">Cortes</th></tr></thead><tbody>${cuts.map((c: any, ci: number) => `<tr><td>Corte ${ci + 1}</td><td class="cut-val">${parseFloat(c).toFixed(2)}m</td></tr>`).join('')}<tr class="cut-total"><td>TOTAL</td><td class="cut-val">${(b.totalLengthM || 0).toFixed(2)}m</td></tr></tbody></table>` : '';
+            const img = b.svgDataUrl ? `<img src="${b.svgDataUrl}" style="width:100%;max-height:180px;object-fit:contain;background:#1e293b;border-radius:8px"/>` : '';
+            return `<div style="margin:16px 0;page-break-inside:avoid"><p style="font-weight:bold;margin:0 0 8px;font-size:14px">Dobra #${i + 1} \u2014 <span class="medida">${((b.roundedWidthCm || 0) / 100).toFixed(2)}m larg.</span></p><div style="display:flex;gap:16px;align-items:flex-start">${img ? `<div style="flex:1">${img}</div>` : ''}${cutsHtml ? `<div style="flex:0 0 200px">${cutsHtml}</div>` : ''}</div></div>`;
+        }).join('');
         const rows = qBends.map((b: any, i: number) => {
             const lengths = Array.isArray(b.lengths) ? b.lengths : [];
             const totalLen = b.totalLengthM || lengths.filter((l: any) => parseFloat(l) > 0).reduce((a: number, c: any) => a + parseFloat(c), 0);
@@ -383,7 +387,7 @@ export default function Orcamento() {
         }).join('');
         const tM2 = parseFloat(q.totalM2 || 0);
         const tVal = parseFloat(q.finalValue || q.totalValue || 0);
-        const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Orçamento #${q.id}</title><style>
+        const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Or\u00e7amento #${q.id}</title><style>
 body{font-family:Arial,sans-serif;padding:24px;color:#111;max-width:900px;margin:auto}
 h1{font-size:20px;margin-bottom:4px}
 .status{display:inline-block;background:#fef3c7;color:#92400e;border:2px solid #f59e0b;font-weight:bold;font-size:13px;padding:6px 14px;border-radius:8px;margin:8px 0}
@@ -394,16 +398,22 @@ tr:nth-child(even) td{background:#f8fafc}
 .big{font-size:18px;font-weight:bold;color:#16a34a}
 .metros{font-size:16px;font-weight:bold;background:#eef2ff;border:2px solid #6366f1;padding:6px 12px;border-radius:6px;color:#4338ca}
 .medida{font-size:14px;font-weight:bold;color:#1e40af}
+.cuts-table{width:100%;border-collapse:collapse;margin:0;font-size:13px;border:2px solid #6366f1;border-radius:8px;overflow:hidden}
+.cuts-table th{background:#4338ca;color:#fff;padding:6px 10px;font-size:12px;text-align:center}
+.cuts-table td{padding:6px 10px;border-bottom:1px solid #e0e7ff;background:#eef2ff}
+.cuts-table .cut-val{font-weight:bold;color:#4338ca;text-align:right;font-size:15px}
+.cuts-table .cut-total{background:#c7d2fe}
+.cuts-table .cut-total td{font-weight:900;border-bottom:none;font-size:14px}
 @media print{body{padding:8px}}
 </style></head><body>
-<h1>Orçamento #${q.id} — Ferreira Calhas</h1>
+<h1>Or\u00e7amento #${q.id} \u2014 Ferreira Calhas</h1>
 <p>Cliente: <b>${q.clientName || ''}</b>${q.notes ? ` | Obs: ${q.notes}` : ''}</p>
-<div class="status">⏳ STATUS: ${(STATUS_LABELS[q.status]?.label || q.status).toUpperCase()}</div>
+<div class="status">\u23f3 STATUS: ${(STATUS_LABELS[q.status]?.label || q.status).toUpperCase()}</div>
 ${imgRows}
-<table><thead><tr><th>#</th><th>Riscos</th><th>Largura</th><th style="background:#4338ca">Metros corridos</th><th>m²</th><th>Valor</th></tr></thead><tbody>${rows}</tbody>
+<table><thead><tr><th>#</th><th>Riscos</th><th>Largura</th><th style="background:#4338ca">Metros corridos</th><th>m\u00b2</th><th>Valor</th></tr></thead><tbody>${rows}</tbody>
 <tfoot>
-<tr><td colspan="4" align="right">Total m²:</td><td colspan="2"><b>${tM2.toFixed(4)} m²</b></td></tr>
-<tr><td colspan="4" align="right">Preço/m²:</td><td colspan="2">R$ ${pm2.toFixed(2)}</td></tr>
+<tr><td colspan="4" align="right">Total m\u00b2:</td><td colspan="2"><b>${tM2.toFixed(4)} m\u00b2</b></td></tr>
+<tr><td colspan="4" align="right">Pre\u00e7o/m\u00b2:</td><td colspan="2">R$ ${pm2.toFixed(2)}</td></tr>
 <tr><td colspan="4" align="right" style="font-size:18px;font-weight:900">TOTAL:</td><td colspan="2" class="big">R$ ${tVal.toFixed(2)}</td></tr>
 </tfoot></table>
 <p style="margin-top:16px;color:#888;font-size:11px">Gerado em ${new Date().toLocaleString('pt-BR')}</p>
@@ -415,11 +425,21 @@ ${imgRows}
     const handleUploadProof = async () => {
         if (!proofFile || !savedQuote) return;
         setUploadingProof(true);
-        const fd = new FormData(); fd.append('proof', proofFile);
-        const res = await fetch(`/api/quotes/${savedQuote.id}/proof`, { method: 'POST', body: fd, credentials: 'include' });
-        setToast(res.ok ? { msg: 'Comprovante enviado!', type: 'success' } : { msg: 'Erro ao enviar', type: 'error' });
-        if (res.ok) setProofFile(null);
-        setUploadingProof(false);
+        try {
+            const fd = new FormData(); fd.append('proof', proofFile);
+            const res = await fetch(`/api/quotes/${savedQuote.id}/proof`, { method: 'POST', body: fd, credentials: 'include' });
+            if (res.ok) {
+                setToast({ msg: 'Comprovante enviado!', type: 'success' });
+                setProofFile(null);
+            } else {
+                const err = await res.json().catch(() => ({}));
+                setToast({ msg: err.error || 'Erro ao enviar comprovante', type: 'error' });
+            }
+        } catch {
+            setToast({ msg: 'Erro de conexão ao enviar comprovante', type: 'error' });
+        } finally {
+            setUploadingProof(false);
+        }
     };
 
     const pricePerM2 = parseFloat(settings.pricePerM2 || '50');
@@ -427,10 +447,14 @@ ${imgRows}
     const totalValue = totalM2 * pricePerM2;
 
     const handleDownloadPDF = () => {
-        const imgRows = bends.map((b, i) => b.svgDataUrl
-            ? `<div style="margin:12px 0;page-break-inside:avoid"><p style="font-weight:bold;margin:0;font-size:14px">Dobra #${i + 1} — <span class="medida">${(b.roundedWidthCm / 100).toFixed(2)}m larg.</span></p><img src="${b.svgDataUrl}" style="width:100%;max-height:180px;object-fit:contain;background:#1e293b;border-radius:8px"/></div>` : '').join('');
+        const imgRows = bends.map((b, i) => {
+            const cuts = b.lengths.filter(l => parseFloat(l) > 0);
+            const cutsHtml = cuts.length > 0 ? `<table class="cuts-table"><thead><tr><th colspan="2">Cortes</th></tr></thead><tbody>${cuts.map((c, ci) => `<tr><td>Corte ${ci + 1}</td><td class="cut-val">${parseFloat(c).toFixed(2)}m</td></tr>`).join('')}<tr class="cut-total"><td>TOTAL</td><td class="cut-val">${b.totalLengthM.toFixed(2)}m</td></tr></tbody></table>` : '';
+            const img = b.svgDataUrl ? `<img src="${b.svgDataUrl}" style="width:100%;max-height:180px;object-fit:contain;background:#1e293b;border-radius:8px"/>` : '';
+            return `<div style="margin:16px 0;page-break-inside:avoid"><p style="font-weight:bold;margin:0 0 8px;font-size:14px">Dobra #${i + 1} \u2014 <span class="medida">${(b.roundedWidthCm / 100).toFixed(2)}m larg.</span></p><div style="display:flex;gap:16px;align-items:flex-start">${img ? `<div style="flex:1">${img}</div>` : ''}${cutsHtml ? `<div style="flex:0 0 200px">${cutsHtml}</div>` : ''}</div></div>`;
+        }).join('');
         const rows = bends.map((b, i) => `<tr><td>#${i + 1}</td><td>${b.risks.map(r => `${DIRECTION_ICONS[r.direction]} ${r.sizeCm}cm`).join(', ')}</td><td class="medida">${(b.roundedWidthCm / 100).toFixed(2)}m</td><td class="metros">${b.lengths.filter(l => parseFloat(l) > 0).join('+')}=${b.totalLengthM.toFixed(2)}m</td><td>${b.m2.toFixed(4)}</td><td>R$${(b.m2 * pricePerM2).toFixed(2)}</td></tr>`).join('');
-        const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Orçamento Ferreira Calhas</title><style>
+        const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Or\u00e7amento Ferreira Calhas</title><style>
 body{font-family:Arial,sans-serif;padding:24px;color:#111;max-width:900px;margin:auto}
 h1{font-size:20px;margin-bottom:4px}
 .status{display:inline-block;background:#fef3c7;color:#92400e;border:2px solid #f59e0b;font-weight:bold;font-size:13px;padding:6px 14px;border-radius:8px;margin:8px 0}
@@ -441,17 +465,23 @@ tr:nth-child(even) td{background:#f8fafc}
 .big{font-size:18px;font-weight:bold;color:#16a34a}
 .metros{font-size:16px;font-weight:bold;background:#eef2ff;border:2px solid #6366f1;padding:6px 12px;border-radius:6px;color:#4338ca}
 .medida{font-size:14px;font-weight:bold;color:#1e40af}
+.cuts-table{width:100%;border-collapse:collapse;margin:0;font-size:13px;border:2px solid #6366f1;border-radius:8px;overflow:hidden}
+.cuts-table th{background:#4338ca;color:#fff;padding:6px 10px;font-size:12px;text-align:center}
+.cuts-table td{padding:6px 10px;border-bottom:1px solid #e0e7ff;background:#eef2ff}
+.cuts-table .cut-val{font-weight:bold;color:#4338ca;text-align:right;font-size:15px}
+.cuts-table .cut-total{background:#c7d2fe}
+.cuts-table .cut-total td{font-weight:900;border-bottom:none;font-size:14px}
 @media print{body{padding:8px}}
 </style></head><body>
-<h1>Orçamento — Ferreira Calhas</h1>
+<h1>Or\u00e7amento \u2014 Ferreira Calhas</h1>
 <p style="color:#555;font-size:12px">${new Date().toLocaleDateString('pt-BR', { day: '2-digit', month: 'long', year: 'numeric' })}</p>
 <p>Cliente: <b>${clientName || user?.name || user?.username || ''}</b>${notes ? ` | Obs: ${notes}` : ''}</p>
-<div class="status">⏳ STATUS: AGUARDANDO PAGAMENTO</div>
+<div class="status">\u23f3 STATUS: AGUARDANDO PAGAMENTO</div>
 ${imgRows}
-<table><thead><tr><th>#</th><th>Riscos</th><th>Largura</th><th style="background:#4338ca">Metros corridos</th><th>m²</th><th>Valor</th></tr></thead><tbody>${rows}</tbody>
+<table><thead><tr><th>#</th><th>Riscos</th><th>Largura</th><th style="background:#4338ca">Metros corridos</th><th>m\u00b2</th><th>Valor</th></tr></thead><tbody>${rows}</tbody>
 <tfoot>
-<tr><td colspan="4" align="right">Total m²:</td><td colspan="2"><b>${totalM2.toFixed(4)} m²</b></td></tr>
-<tr><td colspan="4" align="right">Preço/m²:</td><td colspan="2">R$ ${pricePerM2.toFixed(2)}</td></tr>
+<tr><td colspan="4" align="right">Total m\u00b2:</td><td colspan="2"><b>${totalM2.toFixed(4)} m\u00b2</b></td></tr>
+<tr><td colspan="4" align="right">Pre\u00e7o/m\u00b2:</td><td colspan="2">R$ ${pricePerM2.toFixed(2)}</td></tr>
 <tr><td colspan="4" align="right" style="font-weight:bold">TOTAL A PAGAR:</td><td colspan="2" class="big">R$ ${totalValue.toFixed(2)}</td></tr>
 </tfoot></table>
 <script>window.onload=()=>window.print();<\/script>
@@ -548,30 +578,45 @@ ${imgRows}
                             <div className="text-right text-green-400 font-black text-2xl">
                                 R$ {parseFloat(reportQuote.finalValue || reportQuote.totalValue || 0).toFixed(2)}
                             </div>
-                            {reportBends.length > 0 ? reportBends.map((b: any, i: number) => (
-                                <div key={i} className="bg-white/5 border border-white/10 rounded-2xl p-4 space-y-3">
-                                    <div className="flex items-center justify-between">
-                                        <p className="text-white font-bold">Dobra #{i + 1}</p>
-                                        <p className="text-blue-400 font-black">{((b.roundedWidthCm || 0) / 100).toFixed(2)}m larg.</p>
-                                    </div>
-                                    {b.svgDataUrl && (
-                                        <img src={b.svgDataUrl} alt={`Dobra ${i + 1}`} className="w-full rounded-xl" style={{ maxHeight: 200, objectFit: 'contain', background: '#1e293b' }} />
-                                    )}
-                                    <div className="grid grid-cols-2 gap-2 text-sm">
-                                        <div className="bg-white/5 rounded-xl p-3">
-                                            <p className="text-slate-400 text-xs">Riscos</p>
-                                            <p className="text-white font-bold">{(b.risks || []).map((r: any) => `${DIRECTION_ICONS[r.direction as RiskDirection] || ''} ${r.sizeCm}cm`).join(', ')}</p>
+                            {reportBends.length > 0 ? reportBends.map((b: any, i: number) => {
+                                const cuts = Array.isArray(b.lengths) ? b.lengths.filter((l: any) => parseFloat(l) > 0) : [];
+                                return (
+                                    <div key={i} className="bg-white/5 border border-white/10 rounded-2xl p-4 space-y-3">
+                                        <div className="flex items-center justify-between">
+                                            <p className="text-white font-bold">Dobra #{i + 1}</p>
+                                            <p className="text-blue-400 font-black">{((b.roundedWidthCm || 0) / 100).toFixed(2)}m larg.</p>
                                         </div>
-                                        <div className="bg-indigo-500/10 border border-indigo-500/30 rounded-xl p-3">
-                                            <p className="text-indigo-300 text-xs font-bold">Metros Corridos</p>
-                                            <p className="text-white font-black text-lg">{(b.totalLengthM || 0).toFixed(2)} m</p>
+                                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                            {b.svgDataUrl && (
+                                                <img src={b.svgDataUrl} alt={`Dobra ${i + 1}`} className="w-full rounded-xl" style={{ maxHeight: 180, objectFit: 'contain', background: '#1e293b' }} />
+                                            )}
+                                            <div className="space-y-2">
+                                                <div className="bg-white/5 rounded-xl p-3">
+                                                    <p className="text-slate-400 text-xs mb-1">Riscos</p>
+                                                    <p className="text-white font-bold text-sm">{(b.risks || []).map((r: any) => `${DIRECTION_ICONS[r.direction as RiskDirection] || ''} ${r.sizeCm}cm`).join(', ')}</p>
+                                                </div>
+                                                {cuts.length > 0 && (
+                                                    <div className="bg-indigo-500/10 border border-indigo-500/30 rounded-xl p-3">
+                                                        <p className="text-indigo-300 text-xs font-bold mb-2">Cortes</p>
+                                                        <div className="space-y-1">
+                                                            {cuts.map((c: any, ci: number) => (
+                                                                <div key={ci} className="flex justify-between items-center">
+                                                                    <span className="text-white text-sm">Corte {ci + 1}:</span>
+                                                                    <span className="text-white font-black text-sm bg-indigo-500/20 px-2 py-0.5 rounded">{parseFloat(c).toFixed(2)}m</span>
+                                                                </div>
+                                                            ))}
+                                                        </div>
+                                                        <div className="border-t border-indigo-500/30 mt-2 pt-2 flex justify-between items-center">
+                                                            <span className="text-indigo-300 font-bold text-sm">Total:</span>
+                                                            <span className="text-white font-black text-lg">{(b.totalLengthM || 0).toFixed(2)}m</span>
+                                                        </div>
+                                                    </div>
+                                                )}
+                                            </div>
                                         </div>
                                     </div>
-                                    {Array.isArray(b.lengths) && b.lengths.filter((l: any) => parseFloat(l) > 0).length > 0 && (
-                                        <div className="text-xs text-slate-400">Cortes: {b.lengths.filter((l: any) => parseFloat(l) > 0).join('m + ')}m</div>
-                                    )}
-                                </div>
-                            )) : <p className="text-slate-400 text-sm">Nenhuma dobra encontrada.</p>}
+                                );
+                            }) : <p className="text-slate-400 text-sm">Nenhuma dobra encontrada.</p>}
                             <div className="flex gap-3">
                                 <button onClick={() => handleDownloadQuotePDF(reportQuote, reportBends)}
                                     className="flex-1 px-4 py-3 bg-indigo-500 hover:bg-indigo-400 text-white font-bold rounded-xl cursor-pointer flex items-center justify-center gap-2">
