@@ -220,9 +220,9 @@ export default function Admin() {
     { id: 'testimonials', label: 'Depoimentos', icon: Star, show: isMaster },
     { id: 'users', label: 'Usuários', icon: Users, show: isAdmin },
     { id: 'quotes', label: 'Orçamentos', icon: ClipboardList, show: true, badge: pendingCount },
-    { id: 'inventory', label: 'Estoque', icon: Package, show: isAdmin },
+    { id: 'inventory', label: 'Estoque', icon: Package, show: isMaster },
     { id: 'financial', label: 'Financeiro', icon: TrendingUp, show: isMaster },
-    { id: 'reports', label: 'Relatório', icon: FileText, show: isAdmin },
+    { id: 'reports', label: 'Relatório', icon: FileText, show: isMaster },
   ].filter(t => t.show);
 
   const inputCls = 'w-full bg-slate-50 border-none rounded-2xl px-6 py-4 focus:ring-2 focus:ring-brand-primary transition-all outline-none text-sm';
@@ -569,7 +569,7 @@ export default function Admin() {
               )}
 
               {/* ─── INVENTORY ─── */}
-              {activeTab === 'inventory' && isAdmin && (
+              {activeTab === 'inventory' && isMaster && (
                 <InventoryTab inventory={inventory} onSave={() => fetchData(true)} showToast={showToast} />
               )}
 
@@ -579,7 +579,7 @@ export default function Admin() {
               )}
 
               {/* ─── REPORTS ─── */}
-              {activeTab === 'reports' && isAdmin && (
+              {activeTab === 'reports' && isMaster && (
                 <ReportTab showToast={showToast} />
               )}
             </div>

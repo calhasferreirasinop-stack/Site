@@ -30,7 +30,7 @@ interface Props {
     showToast: (msg: string, type: 'success' | 'error') => void;
 }
 
-const emptyManual = { clientName: '', totalValue: '', notes: '', status: 'paid' };
+const emptyManual = { clientName: '', totalValue: '', totalM2: '', notes: '', status: 'paid' };
 
 export default function QuotesTab({ quotes, currentUser, onSave, showToast }: Props) {
     const [expandedId, setExpandedId] = useState<number | null>(null);
@@ -133,8 +133,11 @@ ${imgRows}
             const res = await fetch('/api/quotes', {
                 method: 'POST', headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                    clientName: manualForm.clientName, notes: manualForm.notes,
-                    totalValue: parseFloat(manualForm.totalValue), totalM2: 0, bends: [], adminCreated: true,
+                    clientName: manualForm.clientName,
+                    notes: '[MANUAL] ' + (manualForm.notes || ''),
+                    totalValue: parseFloat(manualForm.totalValue),
+                    totalM2: parseFloat(manualForm.totalM2) || 0,
+                    bends: [], adminCreated: true,
                 }),
                 credentials: 'include',
             });
@@ -188,6 +191,7 @@ ${imgRows}
                         {[
                             { label: 'Nome do Cliente *', key: 'clientName', ph: 'Ex: João Silva' },
                             { label: 'Valor Total (R$) *', key: 'totalValue', ph: 'Ex: 450.00', type: 'number' },
+                            { label: 'Quantidade m² de calha', key: 'totalM2', ph: 'Ex: 3.5', type: 'number' },
                             { label: 'Observações', key: 'notes', ph: 'Ex: calha 6m galvanizada' },
                         ].map(f => (
                             <div key={f.key}>
@@ -263,8 +267,8 @@ ${imgRows}
                             <div className="p-4 flex items-center gap-4 flex-wrap cursor-pointer" onClick={() => setExpandedId(isExpanded ? null : q.id)}>
                                 <span className="font-black text-slate-300 text-sm">#{q.id}</span>
                                 <div className="flex-1 min-w-0">
-                                    <p className="font-bold text-slate-900">{q.clientName || 'Cliente'}</p>
-                                    <p className="text-xs text-slate-400">{new Date(q.createdAt).toLocaleString('pt-BR')}{q.notes ? ` · ${q.notes.substring(0, 40)}` : ''}</p>
+                                    <p className="font-bold text-slate-900 flex items-center gap-2">{q.clientName || 'Cliente'}{q.notes?.startsWith('[MANUAL]') && <span className="text-[10px] bg-amber-100 text-amber-700 font-bold px-2 py-0.5 rounded-full">MANUAL</span>}</p>
+                                    <p className="text-xs text-slate-400">{new Date(q.createdAt).toLocaleString('pt-BR')}{q.notes ? ` · ${q.notes.replace('[MANUAL] ', '').substring(0, 40)}` : ''}</p>
                                 </div>
                                 <span className={`text-xs font-bold px-3 py-1 rounded-full ${st.color}`}>{st.label}</span>
                                 <div className="text-right">

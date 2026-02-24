@@ -385,7 +385,7 @@ export default function Orcamento() {
         const pm2 = parseFloat(settings.pricePerM2 || '50');
         const imgRows = qBends.map((b: any, i: number) => {
             const cuts = Array.isArray(b.lengths) ? b.lengths.filter((l: any) => parseFloat(l) > 0) : [];
-            const cutsHtml = cuts.length > 0 ? `<table class="cuts-table"><thead><tr><th colspan="2">Cortes</th></tr></thead><tbody>${cuts.map((c: any, ci: number) => `<tr><td>Corte ${ci + 1}</td><td class="cut-val">${parseFloat(c).toFixed(2)}m</td></tr>`).join('')}<tr class="cut-total"><td>TOTAL</td><td class="cut-val">${(b.totalLengthM || 0).toFixed(2)}m</td></tr></tbody></table>` : '';
+            const cutsHtml = cuts.length > 0 ? `<table class="cuts-table"><thead><tr><th colspan="2">Cortes</th></tr></thead><tbody>${cuts.map((c: any, ci: number) => `<tr><td>Corte ${ci + 1}</td><td class="cut-val">${parseFloat(c).toFixed(2)}m</td></tr>`).join('')}<tr class="cut-total"><td>Metros corridos</td><td class="cut-val">${(b.totalLengthM || 0).toFixed(2)}m</td></tr></tbody></table>` : '';
             const img = b.svgDataUrl ? `<img src="${b.svgDataUrl}" style="width:100%;max-height:180px;object-fit:contain;background:#1e293b;border-radius:8px"/>` : '';
             return `<div style="margin:16px 0;page-break-inside:avoid"><p style="font-weight:bold;margin:0 0 8px;font-size:14px">Dobra #${i + 1} \u2014 <span class="medida">${((b.roundedWidthCm || 0) / 100).toFixed(2)}m larg.</span></p><div style="display:flex;gap:16px;align-items:flex-start">${img ? `<div style="flex:1">${img}</div>` : ''}${cutsHtml ? `<div style="flex:0 0 200px">${cutsHtml}</div>` : ''}</div></div>`;
         }).join('');
@@ -466,7 +466,7 @@ ${settings.reportFooterText ? `<div class="report-footer">${settings.reportFoote
     const handleDownloadPDF = () => {
         const imgRows = bends.map((b, i) => {
             const cuts = b.lengths.filter(l => parseFloat(l) > 0);
-            const cutsHtml = cuts.length > 0 ? `<table class="cuts-table"><thead><tr><th colspan="2">Cortes</th></tr></thead><tbody>${cuts.map((c, ci) => `<tr><td>Corte ${ci + 1}</td><td class="cut-val">${parseFloat(c).toFixed(2)}m</td></tr>`).join('')}<tr class="cut-total"><td>TOTAL</td><td class="cut-val">${b.totalLengthM.toFixed(2)}m</td></tr></tbody></table>` : '';
+            const cutsHtml = cuts.length > 0 ? `<table class="cuts-table"><thead><tr><th colspan="2">Cortes</th></tr></thead><tbody>${cuts.map((c, ci) => `<tr><td>Corte ${ci + 1}</td><td class="cut-val">${parseFloat(c).toFixed(2)}m</td></tr>`).join('')}<tr class="cut-total"><td>Metros corridos</td><td class="cut-val">${b.totalLengthM.toFixed(2)}m</td></tr></tbody></table>` : '';
             const img = b.svgDataUrl ? `<img src="${b.svgDataUrl}" style="width:100%;max-height:180px;object-fit:contain;background:#1e293b;border-radius:8px"/>` : '';
             return `<div style="margin:16px 0;page-break-inside:avoid"><p style="font-weight:bold;margin:0 0 8px;font-size:14px">Dobra #${i + 1} \u2014 <span class="medida">${(b.roundedWidthCm / 100).toFixed(2)}m larg.</span></p><div style="display:flex;gap:16px;align-items:flex-start">${img ? `<div style="flex:1">${img}</div>` : ''}${cutsHtml ? `<div style="flex:0 0 200px">${cutsHtml}</div>` : ''}</div></div>`;
         }).join('');
@@ -1095,7 +1095,7 @@ ${settings.reportFooterText ? `<div class="report-footer">${settings.reportFoote
                         <div className="flex flex-wrap gap-3 justify-between">
                             <div className="flex gap-3 flex-wrap">
                                 <button onClick={() => setStep('bends')} className="px-5 py-3 bg-white/10 hover:bg-white/20 text-white rounded-2xl flex items-center gap-2 font-bold cursor-pointer"><ChevronLeft className="w-4 h-4" /> Voltar</button>
-                                <button onClick={() => window.print()} className="px-5 py-3 bg-white/10 hover:bg-white/20 text-white rounded-2xl flex items-center gap-2 font-bold cursor-pointer"><Printer className="w-4 h-4" /> Imprimir</button>
+                                <button onClick={handleDownloadPDF} className="px-5 py-3 bg-white/10 hover:bg-white/20 text-white rounded-2xl flex items-center gap-2 font-bold cursor-pointer"><Printer className="w-4 h-4" /> Imprimir</button>
                                 <button onClick={handleDownloadPDF} className="px-5 py-3 bg-indigo-500 hover:bg-indigo-400 text-white rounded-2xl flex items-center gap-2 font-bold cursor-pointer"><FileDown className="w-4 h-4" /> Baixar PDF</button>
                             </div>
                             <button onClick={handleSubmit} disabled={submitting}
@@ -1188,7 +1188,7 @@ ${settings.reportFooterText ? `<div class="report-footer">${settings.reportFoote
                         </div>
                         <div className="flex flex-wrap gap-3 justify-between">
                             <div className="flex gap-3 flex-wrap">
-                                <button onClick={() => window.print()} className="px-5 py-3 bg-white/10 hover:bg-white/20 text-white rounded-2xl flex items-center gap-2 font-bold cursor-pointer"><Printer className="w-4 h-4" /> Imprimir</button>
+                                <button onClick={handleDownloadPDF} className="px-5 py-3 bg-white/10 hover:bg-white/20 text-white rounded-2xl flex items-center gap-2 font-bold cursor-pointer"><Printer className="w-4 h-4" /> Imprimir</button>
                                 <button onClick={handleDownloadPDF} className="px-5 py-3 bg-indigo-500 hover:bg-indigo-400 text-white rounded-2xl flex items-center gap-2 font-bold cursor-pointer"><FileDown className="w-4 h-4" /> Baixar PDF</button>
                                 <button onClick={() => { setBends([]); setStep('bends'); setSavedQuote(null); setNotes(''); setClientName(''); setShowPostConfirm(false); setShowMyQuotes(true); fetch('/api/quotes', { credentials: 'include' }).then(r => r.json()).then(setMyQuotes).catch(() => { }); }}
                                     className="px-5 py-3 bg-blue-500 hover:bg-blue-400 text-white rounded-2xl flex items-center gap-2 font-bold cursor-pointer">
@@ -1204,13 +1204,7 @@ ${settings.reportFooterText ? `<div class="report-footer">${settings.reportFoote
                 )}
             </div>
 
-            <style>{`
-                @media print {
-                    body * { visibility: hidden; background: white !important; color: black !important; }
-                    #quote-print, #quote-print * { visibility: visible; }
-                    #quote-print { position: fixed; top: 0; left: 0; width: 100%; background: white !important; color: black !important; }
-                }
-            `}</style>
+
         </div>
     );
 }

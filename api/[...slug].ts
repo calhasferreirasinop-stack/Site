@@ -488,8 +488,7 @@ app.put('/api/quotes/:id/status', authenticate as any, async (req: any, res) => 
                     quoteId: id, clientName: quote.clientName,
                     grossValue: quote.totalValue, discountValue: quote.discountValue || 0,
                     netValue: quote.finalValue || quote.totalValue, paymentMethod: 'pix',
-                    status: 'aguardando_pagamento', paidAt: new Date().toISOString(),
-                    createdAt: new Date().toISOString(),
+                    paidAt: new Date().toISOString(), createdAt: new Date().toISOString(),
                 });
                 if (finErr) console.error('[FINANCIAL] Error creating record:', finErr.message, finErr.details, finErr.hint);
                 else console.log('[FINANCIAL] Record created for quote', id);
@@ -503,7 +502,7 @@ app.put('/api/quotes/:id/status', authenticate as any, async (req: any, res) => 
             const { data: existing } = await supabase.from('financial_records').select('id').eq('quoteId', id).single();
             if (existing) {
                 await supabase.from('financial_records').update({
-                    status: 'pago', paidAt: new Date().toISOString(),
+                    paidAt: new Date().toISOString(),
                     netValue: quote.finalValue || quote.totalValue,
                 }).eq('quoteId', id);
             } else {
@@ -512,8 +511,7 @@ app.put('/api/quotes/:id/status', authenticate as any, async (req: any, res) => 
                     quoteId: id, clientName: quote.clientName,
                     grossValue: quote.totalValue, discountValue: quote.discountValue || 0,
                     netValue: quote.finalValue || quote.totalValue, paymentMethod: 'pix',
-                    status: 'pago', paidAt: new Date().toISOString(),
-                    createdAt: new Date().toISOString(),
+                    paidAt: new Date().toISOString(), createdAt: new Date().toISOString(),
                 });
                 if (finErr) console.error('[FINANCIAL] Error creating paid record:', finErr.message, finErr.details, finErr.hint);
                 else console.log('[FINANCIAL] Paid record created for quote', id);
@@ -631,8 +629,31 @@ app.get('/api/inventory/summary', requireAdmin as any, async (_req, res) => {
     const total = (inv || []).reduce((s, i) => s + parseFloat(i.availableM2 || 0), 0);
     res.json({ totalAvailableM2: total, lowStock: total < threshold, threshold });
 });
+// Inventory movements (entry/exit history)
+app.get('/api/inventory/movements', requireAdmin as any, async (_req, res) => {
+    try {
+        const { data: txns } = await supabase.from('inventory_transactions')
+            .select('*')
+            .order('createdAt', { ascending: false })
+            .limit(100);
+        // Enrich with inventory description
+        const invIds = [...new Set((txns || []).map(t => t.inventoryId))];
+        let invMap: Record<string, string> = {};
+        if (invIds.length > 0) {
+            const { data: invs } = await supabase.from('inventory').select('id, description').in('id', invIds);
+            invMap = (invs || []).reduce((a, i) => ({ ...a, [i.id]: i.description }), {});
+        }
+        const enriched = (txns || []).map(t => ({
+            ...t,
+            inventoryDescription: invMap[t.inventoryId] || `Bobina #${t.inventoryId}`,
+        }));
+        res.json(enriched);
+    } catch (e: any) {
+        console.error('[INVENTORY] movements error:', e.message);
+        res.status(500).json({ error: e.message });
+    }
+});
 
-// ── FINANCIAL ────────────────────────────────────────────────────────────────
 app.get('/api/financial', requireAdmin as any, async (req, res) => {
     const { from, to, method } = req.query;
     let q = supabase.from('financial_records').select('*').order('paidAt', { ascending: false });
