@@ -43,25 +43,31 @@ export default function QuotesTab({ quotes, currentUser, onSave, showToast }: Pr
     const [showCreate, setShowCreate] = useState(false);
     const [manualForm, setManualForm] = useState(emptyManual);
     const [creating, setCreating] = useState(false);
+    const [reopenConfirm, setReopenConfirm] = useState<any>(null);
     const [statusFilter, setStatusFilter] = useState('all');
 
     const isAdminOrMaster = currentUser?.role === 'admin' || currentUser?.role === 'master';
     const isMaster = currentUser?.role === 'master';
 
-    const handleDownloadPDF = (q: any, qBends: any[]) => {
-        const imgRows = qBends.map((b: any, i: number) => b.svgDataUrl
-            ? `<div style="margin:12px 0;page-break-inside:avoid"><p style="font-weight:bold;margin:0;font-size:14px">Dobra #${i + 1} — <span class="medida">${((b.roundedWidthCm || 0) / 100).toFixed(2)}m larg.</span></p><img src="${b.svgDataUrl}" style="width:100%;max-height:180px;object-fit:contain;background:#1e293b;border-radius:8px"/></div>` : '').join('');
+    const handleDownloadPDF = async (q: any, qBends: any[]) => {
+        let sett: Record<string, string> = {};
+        try { const r = await fetch('/api/admin/data', { credentials: 'include' }); if (r.ok) { const d = await r.json(); sett = d.settings || {}; } } catch { }
+        const pm2 = parseFloat(sett.pricePerM2 || '50');
+        const imgRows = qBends.map((b: any, i: number) => {
+            const cuts = Array.isArray(b.lengths) ? b.lengths.filter((l: any) => parseFloat(l) > 0) : [];
+            const cutsHtml = cuts.length > 0 ? `<table class="cuts-table"><thead><tr><th colspan="2">Cortes</th></tr></thead><tbody>${cuts.map((c: any, ci: number) => `<tr><td>Corte ${ci + 1}</td><td class="cut-val">${parseFloat(c).toFixed(2)}m</td></tr>`).join('')}<tr class="cut-total"><td>Metros corridos</td><td class="cut-val">${(b.totalLengthM || 0).toFixed(2)}m</td></tr></tbody></table>` : '';
+            const img = b.svgDataUrl ? `<img src="${b.svgDataUrl}" style="width:100%;max-height:180px;object-fit:contain;background:#1e293b;border-radius:8px"/>` : '';
+            return `<div style="margin:16px 0;page-break-inside:avoid"><p style="font-weight:bold;margin:0 0 8px;font-size:14px">Dobra #${i + 1} \u2014 <span class="medida">${((b.roundedWidthCm || 0) / 100).toFixed(2)}m larg.</span></p><div style="display:flex;gap:16px;align-items:flex-start">${img ? `<div style="flex:1">${img}</div>` : ''}${cutsHtml ? `<div style="flex:0 0 200px">${cutsHtml}</div>` : ''}</div></div>`;
+        }).join('');
         const rows = qBends.map((b: any, i: number) => {
             const lengths = Array.isArray(b.lengths) ? b.lengths : [];
             const totalLen = b.totalLengthM || lengths.filter((l: any) => parseFloat(l) > 0).reduce((a: number, c: any) => a + parseFloat(c), 0);
-            const w = b.roundedWidthCm || 0;
-            const m2 = b.m2 || (w / 100 * totalLen);
-            return `<tr><td>#${i + 1}</td><td>${(b.risks || []).map((r: any) => `${DIRECTION_ICONS[r.direction] || ''} ${r.sizeCm}cm`).join(', ')}</td><td class="medida">${(w / 100).toFixed(2)}m</td><td class="metros">${lengths.filter((l: any) => parseFloat(l) > 0).join('+')}=${totalLen.toFixed(2)}m</td><td>${m2.toFixed(4)}</td><td>R$${(m2 * 115).toFixed(2)}</td></tr>`;
+            const w = b.roundedWidthCm || 0; const m2 = b.m2 || (w / 100 * totalLen);
+            return `<tr><td>#${i + 1}</td><td>${(b.risks || []).map((r: any) => `${DIRECTION_ICONS[r.direction] || ''} ${r.sizeCm}cm`).join(', ')}</td><td class="medida">${(w / 100).toFixed(2)}m</td><td class="metros">${lengths.filter((l: any) => parseFloat(l) > 0).join('+')}=${totalLen.toFixed(2)}m</td><td>${m2.toFixed(4)}</td><td>R$${(m2 * pm2).toFixed(2)}</td></tr>`;
         }).join('');
-        const tM2 = parseFloat(q.totalM2 || 0);
-        const tVal = parseFloat(q.finalValue || q.totalValue || 0);
+        const tM2 = parseFloat(q.totalM2 || 0); const tVal = parseFloat(q.finalValue || q.totalValue || 0);
         const stLabel = (STATUS_CONFIG[q.status]?.label || q.status).toUpperCase();
-        const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Orçamento #${q.id}</title><style>
+        const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Or\u00e7amento #${q.id}</title><style>
 body{font-family:Arial,sans-serif;padding:24px;color:#111;max-width:900px;margin:auto}
 h1{font-size:20px;margin-bottom:4px}
 .status{display:inline-block;background:#fef3c7;color:#92400e;border:2px solid #f59e0b;font-weight:bold;font-size:13px;padding:6px 14px;border-radius:8px;margin:8px 0}
@@ -72,24 +78,37 @@ tr:nth-child(even) td{background:#f8fafc}
 .big{font-size:18px;font-weight:bold;color:#16a34a}
 .metros{font-size:16px;font-weight:bold;background:#eef2ff;border:2px solid #6366f1;padding:6px 12px;border-radius:6px;color:#4338ca}
 .medida{font-size:14px;font-weight:bold;color:#1e40af}
+.cuts-table{width:100%;border-collapse:collapse;margin:0;font-size:13px;border:2px solid #6366f1;border-radius:8px;overflow:hidden}
+.cuts-table th{background:#4338ca;color:#fff;padding:6px 10px;font-size:12px;text-align:center}
+.cuts-table td{padding:6px 10px;border-bottom:1px solid #e0e7ff;background:#eef2ff}
+.cuts-table .cut-val{font-weight:bold;color:#4338ca;text-align:right;font-size:15px}
+.cuts-table .cut-total{background:#c7d2fe}
+.cuts-table .cut-total td{font-weight:900;border-bottom:none;font-size:14px}
+.report-header{display:flex;align-items:center;gap:16px;border-bottom:2px solid #e2e8f0;padding-bottom:16px;margin-bottom:16px}
+.report-header img{height:50px;object-fit:contain}
+.report-header .info{font-size:11px;color:#64748b}
+.report-footer{border-top:2px solid #e2e8f0;padding-top:12px;margin-top:24px;text-align:center;font-size:11px;color:#94a3b8}
 @media print{body{padding:8px}}
 </style></head><body>
-<h1>Orçamento — Ferreira Calhas</h1>
+${sett.reportLogo || sett.reportCompanyName ? `<div class="report-header">${sett.reportLogo ? `<img src="${sett.reportLogo}" alt="Logo"/>` : ''}<div><strong style="font-size:16px">${sett.reportCompanyName || ''}</strong><div class="info">${[sett.reportPhone, sett.reportEmail].filter(Boolean).join(' | ')}${sett.reportAddress ? `<br/>${sett.reportAddress}` : ''}${sett.reportHeaderText ? `<br/>${sett.reportHeaderText}` : ''}</div></div></div>` : ''}
+<h1>Or\u00e7amento #${q.id} \u2014 ${sett.reportCompanyName || 'Ferreira Calhas'}</h1>
 <p style="color:#555;font-size:12px">${new Date(q.createdAt).toLocaleDateString('pt-BR', { day: '2-digit', month: 'long', year: 'numeric' })}</p>
 <p>Cliente: <b>${q.clientName || ''}</b>${q.notes ? ` | Obs: ${q.notes}` : ''}</p>
-<div class="status">⏳ STATUS: ${stLabel}</div>
+<div class="status">\u23f3 STATUS: ${stLabel}</div>
 ${imgRows}
-<table><thead><tr><th>#</th><th>Riscos</th><th>Largura</th><th style="background:#4338ca">Metros corridos</th><th>m²</th><th>Valor</th></tr></thead><tbody>${rows}</tbody>
+<table><thead><tr><th>#</th><th>Riscos</th><th>Largura</th><th style="background:#4338ca">Metros corridos</th><th>m\u00b2</th><th>Valor</th></tr></thead><tbody>${rows}</tbody>
 <tfoot>
-<tr><td colspan="4" align="right">Total m²:</td><td colspan="2"><b>${tM2.toFixed(4)} m²</b></td></tr>
-<tr><td colspan="4" align="right" style="font-weight:bold">TOTAL A PAGAR:</td><td colspan="2" class="big">R$ ${tVal.toFixed(2)}</td></tr>
+<tr><td colspan="4" align="right">Total m\u00b2:</td><td colspan="2"><b>${tM2.toFixed(4)} m\u00b2</b></td></tr>
+<tr><td colspan="4" align="right">Pre\u00e7o/m\u00b2:</td><td colspan="2">R$ ${pm2.toFixed(2)}</td></tr>
+<tr><td colspan="4" align="right" style="font-size:18px;font-weight:900">TOTAL:</td><td colspan="2" class="big">R$ ${tVal.toFixed(2)}</td></tr>
 </tfoot></table>
-<script>window.onload=()=>window.print();<\/script>
+${sett.reportFooterText ? `<div class="report-footer">${sett.reportFooterText}</div>` : ''}
+<p style="margin-top:16px;color:#888;font-size:11px">Gerado em ${new Date().toLocaleString('pt-BR')}</p>
 </body></html>`;
         const b2 = new Blob([html], { type: 'text/html' });
-        const url = URL.createObjectURL(b2);
-        const w = window.open(url, '_blank');
-        if (w) setTimeout(() => URL.revokeObjectURL(url), 10000);
+        const bUrl = URL.createObjectURL(b2);
+        const w2 = window.open(bUrl, '_blank');
+        if (w2) setTimeout(() => URL.revokeObjectURL(bUrl), 10000);
     };
 
     // Load bends when a quote is expanded
@@ -366,7 +385,13 @@ ${imgRows}
                                                     </button>
                                                 )}
                                                 {q.status !== 'pending' && (
-                                                    <button onClick={() => updateStatus(q.id, 'pending')}
+                                                    <button onClick={() => {
+                                                        if (['paid', 'in_production', 'finished'].includes(q.status)) {
+                                                            setReopenConfirm(q);
+                                                        } else {
+                                                            updateStatus(q.id, 'pending');
+                                                        }
+                                                    }}
                                                         className="px-3 py-1.5 bg-yellow-500 text-white text-xs font-bold rounded-xl hover:bg-yellow-600 cursor-pointer flex items-center gap-1">
                                                         <RotateCcw className="w-3.5 h-3.5" /> Reabrir
                                                     </button>
@@ -401,6 +426,37 @@ ${imgRows}
                     );
                 })}
             </div>
+
+            {/* Reopen confirmation modal */}
+            {reopenConfirm && (
+                <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+                    <div className="bg-white rounded-3xl p-8 max-w-md w-full space-y-4 shadow-2xl">
+                        <h3 className="font-bold text-xl flex items-center gap-2 text-amber-600">
+                            ⚠️ Atenção — Reabrir Orçamento
+                        </h3>
+                        <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 space-y-2">
+                            <p className="text-sm text-amber-800 font-bold">Orçamento #{reopenConfirm.id} — {reopenConfirm.clientName}</p>
+                            <p className="text-sm text-amber-700">Este orçamento já possui <strong>pagamento efetuado</strong> ou está em produção/finalizado.</p>
+                            <p className="text-sm text-amber-700">Ao reabrir:</p>
+                            <ul className="text-sm text-amber-700 list-disc pl-5 space-y-1">
+                                <li>O registro financeiro será <strong>removido</strong></li>
+                                <li>O estoque consumido será <strong>devolvido</strong></li>
+                                <li>As movimentações de estoque serão <strong>excluídas</strong></li>
+                                <li>A diferença será <strong>adicionada/recarregada</strong> ao reprocessar</li>
+                            </ul>
+                        </div>
+                        <p className="text-sm text-slate-600">Tem certeza que deseja reabrir este orçamento?</p>
+                        <div className="flex gap-3">
+                            <button onClick={() => setReopenConfirm(null)}
+                                className="flex-1 px-4 py-2.5 bg-white border border-slate-200 rounded-xl font-bold text-sm text-slate-600 cursor-pointer">Cancelar</button>
+                            <button onClick={() => { updateStatus(reopenConfirm.id, 'pending'); setReopenConfirm(null); }}
+                                className="flex-1 px-4 py-2.5 bg-amber-500 hover:bg-amber-600 text-white rounded-xl font-bold text-sm cursor-pointer flex items-center justify-center gap-2">
+                                <RotateCcw className="w-4 h-4" /> Confirmar Reabertura
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     );
 }

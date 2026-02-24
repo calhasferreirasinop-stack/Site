@@ -29,6 +29,52 @@ function parseCookies(req: express.Request): Record<string, string> {
     );
 }
 
+function getClientIP(req: express.Request): string {
+    const forwarded = req.headers['x-forwarded-for'];
+    if (typeof forwarded === 'string') return forwarded.split(',')[0].trim();
+    if (Array.isArray(forwarded)) return forwarded[0];
+    return req.socket?.remoteAddress || 'unknown';
+}
+
+let logTableReady = false;
+async function ensureLogTable() {
+    if (logTableReady) return;
+    try {
+        await supabase.rpc('exec_sql', {
+            sql: `CREATE TABLE IF NOT EXISTS user_logs (
+            id SERIAL PRIMARY KEY,
+            "userId" INTEGER,
+            username TEXT,
+            action TEXT NOT NULL,
+            details TEXT,
+            menu TEXT,
+            "ipAddress" TEXT,
+            "errorMessage" TEXT,
+            "createdAt" TIMESTAMP NOT NULL DEFAULT NOW()
+        )` });
+    } catch { /* table might already exist */ }
+    logTableReady = true;
+}
+
+async function logUserAction(opts: {
+    userId?: number | null; username?: string; action: string;
+    details?: string; menu?: string; ipAddress?: string; errorMessage?: string;
+}) {
+    try {
+        await ensureLogTable();
+        await supabase.from('user_logs').insert({
+            userId: opts.userId || null,
+            username: opts.username || 'system',
+            action: opts.action,
+            details: opts.details || null,
+            menu: opts.menu || null,
+            ipAddress: opts.ipAddress || null,
+            errorMessage: opts.errorMessage || null,
+            createdAt: new Date().toISOString(),
+        });
+    } catch (e: any) { console.error('[LOG] Failed to write log:', e.message); }
+}
+
 async function parseSession(req: express.Request): Promise<any | null> {
     const cookies = parseCookies(req);
     const session = cookies['session'];
@@ -113,6 +159,7 @@ app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 // ── AUTH ────────────────────────────────────────────────────────────────────
 app.post('/api/login', async (req, res) => {
     const { username, password } = req.body || {};
+    const ip = getClientIP(req);
     const { data: users } = await supabase.from('users')
         .select('*').eq('username', username).eq('active', true).limit(1);
     const user = users?.[0];
@@ -123,12 +170,16 @@ app.post('/api/login', async (req, res) => {
             `session=${Buffer.from(JSON.stringify({ userId: user.id })).toString('base64')}; HttpOnly; Secure; SameSite=Lax; Max-Age=${30 * 24 * 3600}; Path=/`,
             'admin_session=; HttpOnly; Secure; SameSite=Lax; Max-Age=0; Path=/',
         ]);
+        logUserAction({ userId: user.id, username: user.username, action: 'LOGIN_SUCCESS', details: `Login bem-sucedido`, menu: 'Auth', ipAddress: ip });
         return res.json({ success: true, role: user.role, name: user.name || user.username });
     }
+    logUserAction({ username: username || 'unknown', action: 'LOGIN_FAILED', details: `Tentativa de login falhou para: ${username || '(vazio)'}`, menu: 'Auth', ipAddress: ip, errorMessage: !user ? 'Usu\u00e1rio n\u00e3o encontrado' : 'Senha incorreta' });
     return res.status(401).json({ error: 'Credenciais inválidas' });
 });
 
-app.post('/api/logout', (_req, res) => {
+app.post('/api/logout', async (req, res) => {
+    const user = await parseSession(req);
+    if (user) logUserAction({ userId: user.id, username: user.username, action: 'LOGOUT', details: 'Usu\u00e1rio fez logout', menu: 'Auth', ipAddress: getClientIP(req) });
     res.setHeader('Set-Cookie', [
         'session=; HttpOnly; Secure; SameSite=Lax; Max-Age=0; Path=/',
         'admin_session=; HttpOnly; Secure; SameSite=Lax; Max-Age=0; Path=/',
@@ -479,82 +530,74 @@ app.put('/api/quotes/:id/status', authenticate as any, async (req: any, res) => 
     const { data: quote, error } = await supabase.from('quotes').update(updateData).eq('id', id).select().single();
     if (error) return res.status(500).json({ error: error.message });
 
-    // ── Financial: CREATE record on 'in_production' ──────────────────────
-    if (status === 'in_production' && quote) {
-        try {
-            const { data: existing } = await supabase.from('financial_records').select('id').eq('quoteId', id).single();
-            if (!existing) {
-                const { error: finErr } = await supabase.from('financial_records').insert({
-                    quoteId: id, clientName: quote.clientName,
-                    grossValue: quote.totalValue, discountValue: quote.discountValue || 0,
-                    netValue: quote.finalValue || quote.totalValue, paymentMethod: 'pix',
-                    paidAt: new Date().toISOString(), createdAt: new Date().toISOString(),
-                });
-                if (finErr) console.error('[FINANCIAL] Error creating record:', finErr.message, finErr.details, finErr.hint);
-                else console.log('[FINANCIAL] Record created for quote', id);
-            }
-        } catch (e: any) { console.error('[FINANCIAL] Exception on in_production:', e.message); }
-    }
-
-    // ── Financial: CREATE or UPDATE record on 'paid' ─────────────────────
-    if (status === 'paid' && quote) {
+    // ── Financial: CREATE or UPDATE record on paid / in_production / finished ──
+    if ((status === 'in_production' || status === 'paid' || status === 'finished') && quote) {
         try {
             const { data: existing } = await supabase.from('financial_records').select('id').eq('quoteId', id).single();
             if (existing) {
-                await supabase.from('financial_records').update({
-                    paidAt: new Date().toISOString(),
-                    netValue: quote.finalValue || quote.totalValue,
-                }).eq('quoteId', id);
+                const upd: any = { netValue: quote.finalValue || quote.totalValue };
+                if (status === 'paid') upd.paidAt = new Date().toISOString();
+                await supabase.from('financial_records').update(upd).eq('quoteId', id);
+                console.log('[FINANCIAL] Updated record for quote', id, 'status:', status);
             } else {
-                // Direct to paid without going through in_production
                 const { error: finErr } = await supabase.from('financial_records').insert({
                     quoteId: id, clientName: quote.clientName,
                     grossValue: quote.totalValue, discountValue: quote.discountValue || 0,
                     netValue: quote.finalValue || quote.totalValue, paymentMethod: 'pix',
-                    paidAt: new Date().toISOString(), createdAt: new Date().toISOString(),
+                    paidAt: status === 'paid' ? new Date().toISOString() : null,
+                    createdAt: new Date().toISOString(),
                 });
-                if (finErr) console.error('[FINANCIAL] Error creating paid record:', finErr.message, finErr.details, finErr.hint);
-                else console.log('[FINANCIAL] Paid record created for quote', id);
+                if (finErr) console.error('[FINANCIAL] Error creating record:', finErr.message, finErr.details, finErr.hint);
+                else console.log('[FINANCIAL] Record created for quote', id, 'status:', status);
             }
-        } catch (e: any) { console.error('[FINANCIAL] Exception on paid:', e.message); }
+        } catch (e: any) { console.error('[FINANCIAL] Exception:', e.message); }
     }
 
-    // ── Financial: REMOVE record on reopen (pending) or cancel ───────────
+    // ── Financial + Inventory: CLEANUP on reopen (pending) or cancel ──────
     if ((status === 'pending' || status === 'cancelled') && quote) {
+        // Delete financial record
         await supabase.from('financial_records').delete().eq('quoteId', id);
+        console.log('[FINANCIAL] Deleted record for reopened/cancelled quote', id);
+
         // Restore inventory that was deducted
         const { data: txns } = await supabase.from('inventory_transactions')
             .select('*').eq('quoteId', id).eq('type', 'consumption');
         if (txns && txns.length > 0) {
             for (const tx of txns) {
-                // Get current inventory and restore consumed amount
                 const { data: inv } = await supabase.from('inventory').select('availableM2').eq('id', tx.inventoryId).single();
                 if (inv) {
                     await supabase.from('inventory').update({
                         availableM2: parseFloat(inv.availableM2) + parseFloat(tx.m2Amount)
                     }).eq('id', tx.inventoryId);
                 }
-                // Record restoration transaction
-                await supabase.from('inventory_transactions').insert({
-                    inventoryId: tx.inventoryId, quoteId: id, type: 'restoration',
-                    m2Amount: parseFloat(tx.m2Amount), createdBy: req.user.id,
-                });
             }
+            // Delete ALL movements for this quote (consumption + restoration)
+            await supabase.from('inventory_transactions').delete().eq('quoteId', id);
+            console.log('[INVENTORY] Restored and cleaned movements for quote', id);
         }
     }
 
-    // Inventory deduction on production
-    if (status === 'in_production' && quote?.totalM2) {
-        const { data: inventories } = await supabase.from('inventory').select('*').gt('availableM2', 0).order('purchasedAt', { ascending: true });
-        let remaining = parseFloat(quote.totalM2);
-        for (const inv of inventories || []) {
-            if (remaining <= 0) break;
-            const debit = Math.min(remaining, parseFloat(inv.availableM2));
-            await supabase.from('inventory').update({ availableM2: parseFloat(inv.availableM2) - debit }).eq('id', inv.id);
-            await supabase.from('inventory_transactions').insert({ inventoryId: inv.id, quoteId: id, type: 'consumption', m2Amount: debit, createdBy: req.user.id });
-            remaining -= debit;
+    // ── Inventory deduction on in_production or finished ─────────────────
+    if ((status === 'in_production' || status === 'finished') && quote?.totalM2) {
+        // Check if already deducted (prevent double deduction)
+        const { data: existingTxns } = await supabase.from('inventory_transactions')
+            .select('id').eq('quoteId', id).eq('type', 'consumption').limit(1);
+        if (!existingTxns || existingTxns.length === 0) {
+            const { data: inventories } = await supabase.from('inventory').select('*').gt('availableM2', 0).order('purchasedAt', { ascending: true });
+            let remaining = parseFloat(quote.totalM2);
+            for (const inv of inventories || []) {
+                if (remaining <= 0) break;
+                const debit = Math.min(remaining, parseFloat(inv.availableM2));
+                await supabase.from('inventory').update({ availableM2: parseFloat(inv.availableM2) - debit }).eq('id', inv.id);
+                await supabase.from('inventory_transactions').insert({ inventoryId: inv.id, quoteId: id, type: 'consumption', m2Amount: debit, createdBy: req.user.id });
+                remaining -= debit;
+            }
+            console.log('[INVENTORY] Deducted', parseFloat(quote.totalM2), 'm² for quote', id);
+        } else {
+            console.log('[INVENTORY] Already deducted for quote', id, '- skipping');
         }
     }
+    logUserAction({ userId: req.user.id, username: req.user.username || req.user.name, action: 'QUOTE_STATUS_CHANGE', details: `Or\u00e7amento #${id} (${quote?.clientName}) → ${status}`, menu: 'Or\u00e7amentos', ipAddress: getClientIP(req) });
     res.json(quote);
 });
 
@@ -821,6 +864,21 @@ app.post('/api/seed', async (req, res) => {
         ]);
     }
     res.json({ success: true, message: 'Seeded successfully' });
+});
+
+// ── USER LOGS ────────────────────────────────────────────────────────────────
+app.get('/api/user-logs', requireAdmin as any, async (req: any, res) => {
+    try {
+        const { from, to, username, action, limit: lim } = req.query;
+        let q = supabase.from('user_logs').select('*').order('createdAt', { ascending: false }).limit(parseInt(lim as string) || 200);
+        if (from) q = q.gte('createdAt', from as string);
+        if (to) q = q.lte('createdAt', to as string);
+        if (username) q = q.ilike('username', `%${username}%`);
+        if (action) q = q.ilike('action', `%${action}%`);
+        const { data, error } = await q;
+        if (error) return res.status(500).json({ error: error.message });
+        res.json(data || []);
+    } catch (e: any) { res.status(500).json({ error: e.message }); }
 });
 
 // ---------------------------------------------------------------------------
