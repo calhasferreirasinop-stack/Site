@@ -109,6 +109,9 @@ export default function Orcamento() {
     const [editSizeVal, setEditSizeVal] = useState('');
     const [editDirIdx, setEditDirIdx] = useState<number | null>(null);
 
+    // Preserved lengths when editing existing bend
+    const [editingBendLengths, setEditingBendLengths] = useState<string[] | null>(null);
+
     // Post-confirm
     const [showPostConfirm, setShowPostConfirm] = useState(false);
 
@@ -231,12 +234,20 @@ export default function Orcamento() {
         if (isOver) { setToast({ msg: 'Largura excede 1,20m!', type: 'error' }); return; }
         let svgDataUrl = '';
         if (svgRef.current) svgDataUrl = await captureSvg(svgRef.current);
-        const newBend: Bend = { id: uid(), risks: [...currentRisks], totalWidthCm: curWidth, roundedWidthCm: curRounded, lengths: [''], totalLengthM: 0, m2: 0, svgDataUrl };
+        const savedLengths = editingBendLengths && editingBendLengths.some(l => parseFloat(l) > 0) ? editingBendLengths : [''];
+        const newBend: Bend = { id: uid(), risks: [...currentRisks], totalWidthCm: curWidth, roundedWidthCm: curRounded, lengths: savedLengths, totalLengthM: 0, m2: 0, svgDataUrl };
+        // Recalc m2 if lengths were preserved
+        if (savedLengths !== null && savedLengths.some(l => parseFloat(l) > 0)) {
+            const calc = calcM2(curRounded, savedLengths);
+            newBend.totalLengthM = calc.totalLengthM;
+            newBend.m2 = calc.m2;
+        }
         setBends(prev => [...prev, newBend]);
         saveToBendLibrary([...currentRisks], curRounded, svgDataUrl);
         setCurrentRisks([]);
         setPendingDir(null);
         setPendingSize('');
+        setEditingBendLengths(null);
         setShowPostConfirm(true);
         setShowLibrary(false);
         setTimeout(() => metersRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 150);
@@ -253,7 +264,7 @@ export default function Orcamento() {
     const handleSubmit = async () => {
         if (!bends.length) { setToast({ msg: 'Adicione pelo menos uma dobra', type: 'error' }); return; }
         const hasLengths = bends.every(b => b.lengths.some(l => parseFloat(l) > 0));
-        if (!hasLengths) { setToast({ msg: 'Informe metros corridos em todas as dobras', type: 'error' }); return; }
+        if (!hasLengths) { setToast({ msg: 'Informe os cortes (metros corridos) em todas as dobras', type: 'error' }); return; }
         setSubmitting(true);
         try {
             const url = editingQuoteId ? `/api/quotes/${editingQuoteId}` : '/api/quotes';
@@ -404,9 +415,14 @@ tr:nth-child(even) td{background:#f8fafc}
 .cuts-table .cut-val{font-weight:bold;color:#4338ca;text-align:right;font-size:15px}
 .cuts-table .cut-total{background:#c7d2fe}
 .cuts-table .cut-total td{font-weight:900;border-bottom:none;font-size:14px}
+.report-header{display:flex;align-items:center;gap:16px;border-bottom:2px solid #e2e8f0;padding-bottom:16px;margin-bottom:16px}
+.report-header img{height:50px;object-fit:contain}
+.report-header .info{font-size:11px;color:#64748b}
+.report-footer{border-top:2px solid #e2e8f0;padding-top:12px;margin-top:24px;text-align:center;font-size:11px;color:#94a3b8}
 @media print{body{padding:8px}}
 </style></head><body>
-<h1>Or\u00e7amento #${q.id} \u2014 Ferreira Calhas</h1>
+${settings.reportLogo || settings.reportCompanyName ? `<div class="report-header">${settings.reportLogo ? `<img src="${settings.reportLogo}" alt="Logo"/>` : ''}<div><strong style="font-size:16px">${settings.reportCompanyName || ''}</strong><div class="info">${[settings.reportPhone, settings.reportEmail].filter(Boolean).join(' | ')}${settings.reportAddress ? `<br/>${settings.reportAddress}` : ''}${settings.reportHeaderText ? `<br/>${settings.reportHeaderText}` : ''}</div></div></div>` : ''}
+<h1>Or\u00e7amento #${q.id} \u2014 ${settings.reportCompanyName || 'Ferreira Calhas'}</h1>
 <p>Cliente: <b>${q.clientName || ''}</b>${q.notes ? ` | Obs: ${q.notes}` : ''}</p>
 <div class="status">\u23f3 STATUS: ${(STATUS_LABELS[q.status]?.label || q.status).toUpperCase()}</div>
 ${imgRows}
@@ -416,6 +432,7 @@ ${imgRows}
 <tr><td colspan="4" align="right">Pre\u00e7o/m\u00b2:</td><td colspan="2">R$ ${pm2.toFixed(2)}</td></tr>
 <tr><td colspan="4" align="right" style="font-size:18px;font-weight:900">TOTAL:</td><td colspan="2" class="big">R$ ${tVal.toFixed(2)}</td></tr>
 </tfoot></table>
+${settings.reportFooterText ? `<div class="report-footer">${settings.reportFooterText}</div>` : ''}
 <p style="margin-top:16px;color:#888;font-size:11px">Gerado em ${new Date().toLocaleString('pt-BR')}</p>
 </body></html>`;
         const w2 = window.open('', '_blank');
@@ -471,9 +488,14 @@ tr:nth-child(even) td{background:#f8fafc}
 .cuts-table .cut-val{font-weight:bold;color:#4338ca;text-align:right;font-size:15px}
 .cuts-table .cut-total{background:#c7d2fe}
 .cuts-table .cut-total td{font-weight:900;border-bottom:none;font-size:14px}
+.report-header{display:flex;align-items:center;gap:16px;border-bottom:2px solid #e2e8f0;padding-bottom:16px;margin-bottom:16px}
+.report-header img{height:50px;object-fit:contain}
+.report-header .info{font-size:11px;color:#64748b}
+.report-footer{border-top:2px solid #e2e8f0;padding-top:12px;margin-top:24px;text-align:center;font-size:11px;color:#94a3b8}
 @media print{body{padding:8px}}
 </style></head><body>
-<h1>Or\u00e7amento \u2014 Ferreira Calhas</h1>
+${settings.reportLogo || settings.reportCompanyName ? `<div class="report-header">${settings.reportLogo ? `<img src="${settings.reportLogo}" alt="Logo"/>` : ''}<div><strong style="font-size:16px">${settings.reportCompanyName || ''}</strong><div class="info">${[settings.reportPhone, settings.reportEmail].filter(Boolean).join(' | ')}${settings.reportAddress ? `<br/>${settings.reportAddress}` : ''}${settings.reportHeaderText ? `<br/>${settings.reportHeaderText}` : ''}</div></div></div>` : ''}
+<h1>Or\u00e7amento \u2014 ${settings.reportCompanyName || 'Ferreira Calhas'}</h1>
 <p style="color:#555;font-size:12px">${new Date().toLocaleDateString('pt-BR', { day: '2-digit', month: 'long', year: 'numeric' })}</p>
 <p>Cliente: <b>${clientName || user?.name || user?.username || ''}</b>${notes ? ` | Obs: ${notes}` : ''}</p>
 <div class="status">\u23f3 STATUS: AGUARDANDO PAGAMENTO</div>
@@ -484,6 +506,7 @@ ${imgRows}
 <tr><td colspan="4" align="right">Pre\u00e7o/m\u00b2:</td><td colspan="2">R$ ${pricePerM2.toFixed(2)}</td></tr>
 <tr><td colspan="4" align="right" style="font-weight:bold">TOTAL A PAGAR:</td><td colspan="2" class="big">R$ ${totalValue.toFixed(2)}</td></tr>
 </tfoot></table>
+${settings.reportFooterText ? `<div class="report-footer">${settings.reportFooterText}</div>` : ''}
 <script>window.onload=()=>window.print();<\/script>
 </body></html>`;
         const b2 = new Blob([html], { type: 'text/html' });
@@ -947,7 +970,7 @@ ${imgRows}
                                                 </div>
                                             </div>
                                             <div className="flex gap-2">
-                                                <button onClick={() => { setCurrentRisks(bend.risks); setBends(prev => prev.filter(b => b.id !== bend.id)); setShowPostConfirm(false); topRef.current?.scrollIntoView({ behavior: 'smooth' }); }}
+                                                <button onClick={() => { setEditingBendLengths([...bend.lengths]); setCurrentRisks(bend.risks); setBends(prev => prev.filter(b => b.id !== bend.id)); setShowPostConfirm(false); topRef.current?.scrollIntoView({ behavior: 'smooth' }); }}
                                                     className="p-2 text-yellow-400 hover:bg-yellow-400/10 rounded-xl transition-all cursor-pointer" title="Editar">
                                                     <RefreshCw className="w-4 h-4" />
                                                 </button>

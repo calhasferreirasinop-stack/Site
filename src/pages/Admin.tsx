@@ -6,8 +6,9 @@ import UsersTab from '../components/admin/UsersTab';
 import QuotesTab from '../components/admin/QuotesTab';
 import InventoryTab from '../components/admin/InventoryTab';
 import FinancialTab from '../components/admin/FinancialTab';
+import ReportTab from '../components/admin/ReportTab';
 
-type TabId = 'settings' | 'services' | 'posts' | 'gallery' | 'testimonials' | 'users' | 'quotes' | 'inventory' | 'financial';
+type TabId = 'settings' | 'services' | 'posts' | 'gallery' | 'testimonials' | 'users' | 'quotes' | 'inventory' | 'financial' | 'reports';
 
 export default function Admin() {
   const navigate = useNavigate();
@@ -221,6 +222,7 @@ export default function Admin() {
     { id: 'quotes', label: 'Orçamentos', icon: ClipboardList, show: true, badge: pendingCount },
     { id: 'inventory', label: 'Estoque', icon: Package, show: isAdmin },
     { id: 'financial', label: 'Financeiro', icon: TrendingUp, show: isMaster },
+    { id: 'reports', label: 'Relatório', icon: FileText, show: isAdmin },
   ].filter(t => t.show);
 
   const inputCls = 'w-full bg-slate-50 border-none rounded-2xl px-6 py-4 focus:ring-2 focus:ring-brand-primary transition-all outline-none text-sm';
@@ -574,6 +576,11 @@ export default function Admin() {
               {/* ─── FINANCIAL ─── */}
               {activeTab === 'financial' && isMaster && (
                 <FinancialTab showToast={showToast} />
+              )}
+
+              {/* ─── REPORTS ─── */}
+              {activeTab === 'reports' && isAdmin && (
+                <ReportTab showToast={showToast} />
               )}
             </div>
           </main>

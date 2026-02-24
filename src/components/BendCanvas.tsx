@@ -165,17 +165,7 @@ export default function BendCanvas({ risks, maxWidthCm = 120, svgRef, exportMode
                     {/* Points + dimension labels */}
                     {scaled.map((pt, i) => (
                         <g key={i}>
-                            {/* Circles — HIDDEN in export mode */}
-                            {!exportMode && (
-                                <circle cx={pt.x} cy={pt.y} r={i === 0 ? 7 : 5}
-                                    fill={i === 0 ? '#48bb78' : strokeColor}
-                                    stroke="white" strokeWidth="2" />
-                            )}
-                            {/* Small corner dots in export mode for reference */}
-                            {exportMode && i > 0 && i < scaled.length - 1 && (
-                                <circle cx={pt.x} cy={pt.y} r={2}
-                                    fill="rgba(255,255,255,0.4)" />
-                            )}
+                            {/* Dimension labels only - no dots */}
                             {/* Mid-segment label — ALWAYS shown */}
                             {i > 0 && risks[i - 1] && (() => {
                                 const prev = scaled[i - 1];

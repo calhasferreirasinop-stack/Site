@@ -489,9 +489,10 @@ app.put('/api/quotes/:id/status', authenticate as any, async (req: any, res) => 
                     grossValue: quote.totalValue, discountValue: quote.discountValue || 0,
                     netValue: quote.finalValue || quote.totalValue, paymentMethod: 'pix',
                     status: 'aguardando_pagamento', paidAt: new Date().toISOString(),
-                    createdAt: new Date().toISOString(), confirmedBy: req.user.id,
+                    createdAt: new Date().toISOString(),
                 });
-                if (finErr) console.error('[FINANCIAL] Error creating record:', finErr.message);
+                if (finErr) console.error('[FINANCIAL] Error creating record:', finErr.message, finErr.details, finErr.hint);
+                else console.log('[FINANCIAL] Record created for quote', id);
             }
         } catch (e: any) { console.error('[FINANCIAL] Exception on in_production:', e.message); }
     }
@@ -512,9 +513,10 @@ app.put('/api/quotes/:id/status', authenticate as any, async (req: any, res) => 
                     grossValue: quote.totalValue, discountValue: quote.discountValue || 0,
                     netValue: quote.finalValue || quote.totalValue, paymentMethod: 'pix',
                     status: 'pago', paidAt: new Date().toISOString(),
-                    createdAt: new Date().toISOString(), confirmedBy: req.user.id,
+                    createdAt: new Date().toISOString(),
                 });
-                if (finErr) console.error('[FINANCIAL] Error creating paid record:', finErr.message);
+                if (finErr) console.error('[FINANCIAL] Error creating paid record:', finErr.message, finErr.details, finErr.hint);
+                else console.log('[FINANCIAL] Paid record created for quote', id);
             }
         } catch (e: any) { console.error('[FINANCIAL] Exception on paid:', e.message); }
     }
@@ -657,6 +659,36 @@ app.get('/api/financial/summary', requireAdmin as any, async (_req, res) => {
         countAll: allD.length, countToday: todD.length, countMonth: monD.length,
         ticketAverage: allD.length > 0 ? sum(allD) / allD.length : 0,
     });
+});
+
+// ── REPORT SETTINGS ─────────────────────────────────────────────────────────────
+app.post('/api/report-settings', requireAdmin as any, async (req: any, res) => {
+    try {
+        const ct = req.headers['content-type'] || '';
+        let fields: Record<string, string> = {};
+        let logoUrl: string | null = null;
+        if (ct.includes('multipart/form-data')) {
+            const parsed = await parseMultipart(req);
+            fields = parsed.fields;
+            const f = parsed.files.find((x: any) => x.fieldname === 'reportLogoFile');
+            if (f) logoUrl = await uploadToStorage(f.buffer, f.originalname, f.mimetype);
+        } else {
+            fields = req.body || {};
+        }
+        const keys = ['reportCompanyName', 'reportHeaderText', 'reportFooterText', 'reportPhone', 'reportEmail', 'reportAddress'];
+        for (const key of keys) {
+            if (fields[key] !== undefined) {
+                await supabase.from('settings').upsert({ key, value: fields[key] }, { onConflict: 'key' });
+            }
+        }
+        if (logoUrl) {
+            await supabase.from('settings').upsert({ key: 'reportLogo', value: logoUrl }, { onConflict: 'key' });
+        }
+        res.json({ success: true });
+    } catch (e: any) {
+        console.error('[REPORT] Error saving settings:', e.message);
+        res.status(500).json({ error: e.message });
+    }
 });
 
 // ── PIX KEYS ─────────────────────────────────────────────────────────────────
