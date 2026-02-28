@@ -8,6 +8,7 @@ const DIRECTION_ICONS: Record<string, string> = {
 
 const STATUS_CONFIG: Record<string, { label: string; color: string }> = {
     rascunho: { label: 'Rascunho', color: 'bg-slate-100 text-slate-500' },
+    draft: { label: 'Rascunho', color: 'bg-slate-100 text-slate-500' },
     pending: { label: 'Aguardando Pgto', color: 'bg-yellow-100 text-yellow-700' },
     paid: { label: 'Pago', color: 'bg-green-100 text-green-700' },
     in_production: { label: 'Em Produção', color: 'bg-blue-100 text-blue-700' },
@@ -33,9 +34,9 @@ interface Props {
 const emptyManual = { clientName: '', totalValue: '', totalM2: '', notes: '', status: 'paid' };
 
 export default function QuotesTab({ quotes, currentUser, onSave, showToast }: Props) {
-    const [expandedId, setExpandedId] = useState<number | null>(null);
-    const [bendsMap, setBendsMap] = useState<Record<number, any[]>>({});
-    const [loadingBends, setLoadingBends] = useState<number | null>(null);
+    const [expandedId, setExpandedId] = useState<string | null>(null);
+    const [bendsMap, setBendsMap] = useState<Record<string, any[]>>({});
+    const [loadingBends, setLoadingBends] = useState<string | null>(null);
     const [zoomImg, setZoomImg] = useState<string | null>(null);
     const [discountModal, setDiscountModal] = useState<any>(null);
     const [discountVal, setDiscountVal] = useState('');
@@ -122,7 +123,7 @@ ${sett.reportFooterText ? `<div class="report-footer">${sett.reportFooterText}</
             .finally(() => setLoadingBends(null));
     }, [expandedId]);
 
-    const updateStatus = async (id: number, status: string) => {
+    const updateStatus = async (id: string, status: string) => {
         const res = await fetch(`/api/quotes/${id}/status`, {
             method: 'PUT', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ status }), credentials: 'include',
@@ -284,7 +285,7 @@ ${sett.reportFooterText ? `<div class="report-footer">${sett.reportFooterText}</
                         <div key={q.id} className="bg-white border border-slate-100 rounded-2xl overflow-hidden hover:shadow-sm transition-all">
                             {/* Row */}
                             <div className="p-4 flex items-center gap-4 flex-wrap cursor-pointer" onClick={() => setExpandedId(isExpanded ? null : q.id)}>
-                                <span className="font-black text-slate-300 text-sm">#{q.id}</span>
+                                <span className="font-black text-slate-300 text-xs truncate max-w-[80px]">#{q.id}</span>
                                 <div className="flex-1 min-w-0">
                                     <p className="font-bold text-slate-900 flex items-center gap-2">{q.clientName || 'Cliente'}{q.notes?.startsWith('[MANUAL]') && <span className="text-[10px] bg-amber-100 text-amber-700 font-bold px-2 py-0.5 rounded-full">MANUAL</span>}</p>
                                     <p className="text-xs text-slate-400">{new Date(q.createdAt).toLocaleString('pt-BR')}{q.notes ? ` · ${q.notes.replace('[MANUAL] ', '').substring(0, 40)}` : ''}</p>

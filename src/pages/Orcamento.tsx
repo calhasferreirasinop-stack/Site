@@ -305,8 +305,10 @@ export default function Orcamento() {
         if (!bends.length) { setToast({ msg: 'Adicione pelo menos uma dobra', type: 'error' }); return; }
         setSavingDraft(true);
         try {
-            const res = await fetch('/api/quotes', {
-                method: 'POST',
+            const url = editingQuoteId ? `/api/quotes/${editingQuoteId}` : '/api/quotes';
+            const method = editingQuoteId ? 'PUT' : 'POST';
+            const res = await fetch(url, {
+                method,
                 headers: { 'Content-Type': 'application/json' },
                 credentials: 'include',
                 body: JSON.stringify({
@@ -321,14 +323,14 @@ export default function Orcamento() {
                 }),
             });
             if (res.ok) {
-                setToast({ msg: 'Rascunho salvo! Continue depois.', type: 'success' });
+                setToast({ msg: editingQuoteId ? 'Rascunho atualizado!' : 'Rascunho salvo! Continue depois.', type: 'success' });
                 fetch('/api/quotes', { credentials: 'include' }).then(r => r.json()).then(setMyQuotes).catch(() => { });
             } else setToast({ msg: 'Erro ao salvar rascunho', type: 'error' });
         } catch { setToast({ msg: 'Erro ao salvar rascunho', type: 'error' }); }
         finally { setSavingDraft(false); }
     };
 
-    const handleCancelQuote = async (id: number) => {
+    const handleCancelQuote = async (id: string) => {
         if (!confirm('Deseja cancelar este orçamento?')) return;
         const res = await fetch(`/api/quotes/${id}/status`, {
             method: 'PUT', headers: { 'Content-Type': 'application/json' },
@@ -712,10 +714,10 @@ ${settings.reportFooterText ? `<div class="report-footer">${settings.reportFoote
                                 const st = STATUS_LABELS[q.status] || STATUS_LABELS.pending;
                                 return (
                                     <div key={q.id} className="bg-white/5 border border-white/10 rounded-2xl p-4 flex items-center gap-4 flex-wrap">
-                                        <span className="text-white/40 font-black text-sm">#{q.id}</span>
+                                        <span className="text-white/40 font-black text-sm">#{q.id.substring(0, 8)}</span>
                                         <div className="flex-1 min-w-0">
-                                            <p className="text-white font-bold">{q.clientName || 'Cliente'}</p>
-                                            <p className="text-slate-400 text-xs">{new Date(q.createdAt).toLocaleString('pt-BR')}{q.notes ? ` · ${q.notes.substring(0, 50)}` : ''}</p>
+                                            <p className="text-white font-bold">{q.clientName || q.client?.name || 'Cliente'}</p>
+                                            <p className="text-slate-400 text-xs">{q.createdAt ? new Date(q.createdAt).toLocaleString('pt-BR') : ''}{q.notes ? ` · ${q.notes.substring(0, 50)}` : ''}</p>
                                         </div>
                                         <span className={`text-xs font-bold px-3 py-1 rounded-full text-white ${st.color}`}>{st.label}</span>
                                         <p className="text-white font-black">R$ {parseFloat(q.finalValue || q.totalValue || 0).toFixed(2)}</p>
@@ -1111,7 +1113,7 @@ ${settings.reportFooterText ? `<div class="report-footer">${settings.reportFoote
                     <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="space-y-6">
                         <div className="text-center bg-green-500/10 border border-green-500/30 rounded-3xl p-8">
                             <div className="w-16 h-16 bg-green-500 rounded-full flex items-center justify-center mx-auto mb-4 text-3xl">✓</div>
-                            <h2 className="text-2xl font-black text-white mb-2">Orçamento #{savedQuote.id} criado!</h2>
+                            <h2 className="text-2xl font-black text-white mb-2">Orçamento #{savedQuote.id.substring(0, 8)} criado!</h2>
                             <p className="text-slate-300">Nossa equipe foi notificada. Realize o pagamento via PIX.</p>
                         </div>
                         <div className="bg-white/5 border border-white/10 rounded-3xl p-8 space-y-6">

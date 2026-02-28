@@ -14,7 +14,7 @@ interface Props {
     showToast: (msg: string, type: 'success' | 'error') => void;
 }
 
-const emptyForm = { email: '', password: '', name: '', phone: '', role: 'user', active: true };
+const emptyForm = { username: '', password: '', name: '', phone: '', role: 'user', active: true };
 
 export default function UsersTab({ users, currentUser, onSave, showToast }: Props) {
     const [editing, setEditing] = useState<any>(null);
@@ -24,21 +24,26 @@ export default function UsersTab({ users, currentUser, onSave, showToast }: Prop
     const startNew = () => { setEditing('new'); setForm(emptyForm); };
     const startEdit = (u: any) => {
         setEditing(u.id);
-        setForm({ email: u.email || '', password: '', name: u.name || '', phone: u.phone || '', role: u.role, active: u.active });
+        setForm({ username: u.username || '', password: '', name: u.name || '', phone: u.phone || '', role: u.role, active: u.active });
     };
     const cancel = () => { setEditing(null); setForm(emptyForm); };
 
     const handleSave = async () => {
-        if (!form.email) return showToast('E-mail (Login) é obrigatório', 'error');
+        if (!form.username) return showToast('Usuário (Login) é obrigatório', 'error');
         if (editing === 'new' && !form.password) return showToast('Senha é obrigatória', 'error');
         setLoading(true);
         try {
             const url = editing === 'new' ? '/api/users' : `/api/users/${editing}`;
             const body = editing === 'new' ? form : { ...form, password: form.password || undefined };
+            const payload = {
+                ...form,
+                email: form.username.includes('@') ? form.username : `${form.username}@ferreira.com`,
+                password: form.password || undefined
+            };
             const res = await fetch(url, {
                 method: editing === 'new' ? 'POST' : 'PUT',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(body),
+                body: JSON.stringify(payload),
                 credentials: 'include',
             });
             if (!res.ok) { const d = await res.json(); throw new Error(d.error); }
@@ -60,7 +65,7 @@ export default function UsersTab({ users, currentUser, onSave, showToast }: Prop
     const toggleActive = async (u: any) => {
         await fetch(`/api/users/${u.id}`, {
             method: 'PUT', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ active: !u.active, name: u.name, phone: u.phone, email: u.email }),
+            body: JSON.stringify({ active: !u.active, name: u.name, phone: u.phone, username: u.username }),
             credentials: 'include',
         });
         onSave();
@@ -82,10 +87,10 @@ export default function UsersTab({ users, currentUser, onSave, showToast }: Prop
                     <h3 className="font-bold text-slate-900">{editing === 'new' ? 'Novo Usuário' : 'Editar Usuário'}</h3>
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                         <div>
-                            <label className="text-xs font-bold text-slate-500 uppercase ml-1 block mb-1">E-mail / Login *</label>
-                            <input value={form.email} onChange={e => setForm({ ...form, email: e.target.value })}
+                            <label className="text-xs font-bold text-slate-500 uppercase ml-1 block mb-1">Usuário / Login *</label>
+                            <input value={form.username} onChange={e => setForm({ ...form, username: e.target.value })}
                                 disabled={editing !== 'new'}
-                                type="email"
+                                type="text"
                                 className="w-full bg-white border border-slate-200 rounded-xl px-4 py-3 text-sm focus:ring-2 focus:ring-brand-primary outline-none disabled:opacity-50" />
                         </div>
                         <div>
@@ -96,6 +101,7 @@ export default function UsersTab({ users, currentUser, onSave, showToast }: Prop
                         <div>
                             <label className="text-xs font-bold text-slate-500 uppercase ml-1 block mb-1">Nome Completo *</label>
                             <input value={form.name} onChange={e => setForm({ ...form, name: e.target.value })}
+                                placeholder="Nome Completo *"
                                 className="w-full bg-white border border-slate-200 rounded-xl px-4 py-3 text-sm focus:ring-2 focus:ring-brand-primary outline-none" />
                         </div>
                         <div>
@@ -144,7 +150,7 @@ export default function UsersTab({ users, currentUser, onSave, showToast }: Prop
                             </div>
                             <div className="flex-1 min-w-0">
                                 <div className="flex items-center gap-2 flex-wrap">
-                                    <span className="font-bold text-slate-900">{u.name || u.email}</span>
+                                    <span className="font-bold text-slate-900">{u.name || (u.username || u.name)}</span>
                                     <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${cfg.color}`}>{cfg.label}</span>
                                     {!u.active && <span className="text-xs text-slate-400 font-bold bg-slate-100 px-2 py-0.5 rounded-full">Inativo</span>}
                                 </div>
