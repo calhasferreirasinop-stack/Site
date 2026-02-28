@@ -7,15 +7,28 @@ import fs from 'fs';
 import cookieParser from 'cookie-parser';
 import bcrypt from 'bcryptjs';
 import dotenv from 'dotenv';
+import { fileURLToPath } from 'url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 dotenv.config();
+
 
 const app = express();
 const PORT = 3000;
 
+
+
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 app.use(cookieParser());
+
+app.use((req, res, next) => {
+  console.log(`[REQUEST] ${req.method} ${req.url}`);
+  next();
+});
+
 
 const supabaseUrl = process.env.SUPABASE_URL!;
 const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!;
@@ -45,6 +58,34 @@ const storage = multer.diskStorage({
   filename: (_req, file, cb) => cb(null, Date.now() + '-' + Math.round(Math.random() * 1e9) + path.extname(file.originalname)),
 });
 const upload = multer({ storage });
+// --- Security Helpers ---
+const rateLimitMap = new Map<string, { count: number, reset: number }>();
+const checkRateLimit = (ip: string, limit = 50, windowMs = 60000) => {
+  const now = Date.now();
+  const entry = rateLimitMap.get(ip) || { count: 0, reset: now + windowMs };
+  if (now > entry.reset) {
+    entry.count = 1;
+    entry.reset = now + windowMs;
+  } else {
+    entry.count++;
+  }
+  rateLimitMap.set(ip, entry);
+  return entry.count <= limit;
+};
+
+const sanitize = (data: any) => {
+  if (!data) return data;
+  const sensitiveKeys = ['password', 'token', 'session', 'cookie', 'secret', 'key'];
+  const sanitized = { ...data };
+  for (const key of Object.keys(sanitized)) {
+    if (sensitiveKeys.some(sk => key.toLowerCase().includes(sk))) {
+      sanitized[key] = '[REDACTED]';
+    } else if (typeof sanitized[key] === 'object') {
+      sanitized[sanitized] = sanitize(sanitized[key]);
+    }
+  }
+  return sanitized;
+};
 
 // --- Auth Middleware (SaaS V2) ---
 interface AuthUser {
@@ -52,7 +93,9 @@ interface AuthUser {
   companyId: string;
   role: string;
   name?: string;
+  username?: string;
 }
+
 
 const parseSession = async (req: any): Promise<AuthUser | null> => {
   const session = req.cookies.session;
@@ -60,7 +103,14 @@ const parseSession = async (req: any): Promise<AuthUser | null> => {
 
   try {
     const decoded = Buffer.from(session, 'base64').toString('utf8');
-    const { userId } = JSON.parse(decoded);
+    let userId;
+    try {
+      const parsed = JSON.parse(decoded);
+      userId = parsed.userId;
+    } catch (e) {
+      console.warn(`[AUTH_WARN] Malformed session cookie from IP: ${req.ip}`);
+      return null;
+    }
 
     if (!userId) return null;
 
@@ -71,22 +121,33 @@ const parseSession = async (req: any): Promise<AuthUser | null> => {
       .eq('id', userId)
       .single();
 
-    if (error || !profile || !profile.company_id) {
-      console.error(`[AUTH_ERROR] User: ${userId} | Reason: Profile or Company not found`);
+    if (error) {
+      if (error.code === 'PGRST116') {
+        console.error(`[AUTH_ERROR] User: ${userId} | Reason: Profile missing in database`);
+      } else {
+        console.error(`[AUTH_ERROR] User: ${userId} | Reason: Database error | Details: ${error.message}`);
+      }
       return null;
     }
 
-    // Success log
-    console.log(`[AUTH] User: ${userId} | Company: ${profile.company_id} | Role: ${profile.role}`);
+    if (!profile || !profile.company_id) {
+      console.error(`[AUTH_ERROR] User: ${userId} | Reason: Company association missing`);
+      return null;
+    }
+
+    // Success log (sanitized implicitly by not logging req.headers/cookies)
+    console.log(`[AUTH_SUCCESS] User: ${userId} | Company: ${profile.company_id} | Role: ${profile.role}`);
 
     return {
       id: profile.id,
       companyId: profile.company_id,
       role: profile.role,
-      name: profile.name
+      name: profile.name,
+      username: profile.name
     } as AuthUser;
+
   } catch (err) {
-    console.error('[AUTH_EXCEPTION]', err);
+    console.error('[AUTH_EXCEPTION] Unexpected failure in parseSession:', err);
     return null;
   }
 };
@@ -118,9 +179,13 @@ const requireMaster = async (req: any, res: any, next: any) => {
 // AUTH Routes
 // =====================
 app.post('/api/login', async (req, res) => {
-  const { username, password } = req.body;
+  if (!checkRateLimit(req.ip, 10)) {
+    console.warn(`[SECURITY] Login rate limit exceeded for IP: ${req.ip}`);
+    return res.status(429).json({ error: 'Muitas tentativas. Tente novamente em 1 minuto.' });
+  }
 
-  // NOTE: Em produção SaaS, usamos supabase.auth.signInWithPassword
+  const { username, password } = req.body;
+  console.log(`[AUTH_LOGIN_ATTEMPT] User: ${username} | IP: ${req.ip}`);
   // Para manter compatibilidade com o frontend atual, buscamos o profile
   const { data: profile } = await supabase
     .from('profiles')
@@ -129,6 +194,7 @@ app.post('/api/login', async (req, res) => {
     .single();
 
   if (profile) {
+
     // Simulamos a sessão com o ID do perfil (auth.uid)
     const sessionData = Buffer.from(JSON.stringify({ userId: profile.id })).toString('base64');
     res.cookie('session', sessionData, {
@@ -166,6 +232,7 @@ app.get('/api/auth/check', async (req, res) => {
   } else {
     res.json({ authenticated: false });
   }
+
 });
 
 app.get('/api/auth/me', authenticate, (req: any, res) => {
@@ -179,6 +246,63 @@ app.post('/api/auth/change-password', authenticate, async (req: any, res) => {
   await supabase.from('users').update({ password: hashed }).eq('id', req.user.id);
   res.json({ success: true });
 });
+
+
+// =====================
+// CLIENTS Routes (SaaS V2 Map: /api/clients -> clients table)
+// =====================
+app.get('/api/clients', authenticate, async (req: any, res) => {
+  const { data, error } = await supabase
+    .from('clients')
+    .select('*')
+    .eq('company_id', req.user.companyId)
+    .order('name', { ascending: true });
+
+  if (error) return res.status(500).json({ error: error.message });
+  res.json(data || []);
+});
+
+app.post('/api/clients', authenticate, async (req: any, res) => {
+  const { name, email, phone, document, address } = req.body;
+  const { data, error } = await supabase.from('clients').insert({
+    company_id: req.user.companyId,
+    name, email, phone, document, address
+  }).select().single();
+
+  if (error) return res.status(500).json({ error: error.message });
+  res.json(data);
+});
+
+app.put('/api/clients/:id', authenticate, async (req: any, res) => {
+  const { name, email, phone, document, address } = req.body;
+  const { data, error } = await supabase.from('clients')
+    .update({ name, email, phone, document, address, updated_at: new Date().toISOString() })
+    .eq('id', req.params.id)
+    .eq('company_id', req.user.companyId)
+    .select().single();
+
+  if (error) return res.status(500).json({ error: error.message });
+  res.json(data);
+});
+
+app.delete('/api/clients/:id', authenticate, async (req: any, res) => {
+  await supabase.from('clients').delete().eq('id', req.params.id).eq('company_id', req.user.companyId);
+  res.json({ success: true });
+});
+
+
+// =====================
+// HARNESS ALIASES (Compatibility for Test Harness UI)
+// =====================
+// Redirects to map the Harness names to existing logic
+app.get('/api/products', requireAdmin, (req, res) => res.redirect(307, '/api/inventory'));
+app.post('/api/products', requireAdmin, (req, res) => res.redirect(307, '/api/inventory'));
+
+app.get('/api/estimates', authenticate, (req, res) => res.redirect(307, '/api/quotes'));
+app.post('/api/estimates', authenticate, (req, res) => res.redirect(307, '/api/quotes'));
+
+app.get('/api/payments', requireAdmin, (req, res) => res.redirect(307, '/api/financial'));
+// Manual payment registration handled via existing /api/quotes/:id/status or specific financial flows
 
 // =====================
 // PROFILES Routes (SaaS V2: Scoped to Company)
@@ -194,21 +318,63 @@ app.get('/api/users', requireAdmin, async (req: any, res) => {
 });
 
 app.post('/api/users', requireAdmin, async (req: any, res) => {
-  const { username, name, role } = req.body;
+  if (!checkRateLimit(req.ip, 20)) return res.status(429).json({ error: 'Rate limit exceeded' });
 
-  // Security: Only master can assign higher roles
-  if ((role === 'admin' || role === 'master') && req.user.role !== 'master') {
-    return res.status(403).json({ error: 'Apenas master pode atribuir cargos administrativos' });
+  const { email, password, name, role, phone } = req.body;
+
+  // Security: Only master can assign master role
+  if (role === 'master' && req.user.role !== 'master') {
+    return res.status(403).json({ error: 'Apenas master pode criar outros masters' });
   }
 
-  const { data, error } = await supabase.from('profiles').insert({
-    company_id: req.user.companyId,
-    name: name || username,
-    role: role || 'user',
-  }).select().single();
+  // Security: Derived company_id (ignore any sent from frontend)
+  const companyId = req.user.companyId;
 
-  if (error) return res.status(500).json({ error: error.message });
-  res.json(data);
+  try {
+    // 1. Create User in Supabase Auth (Onboarding trigger handles profile/company creation)
+    const { data: authData, error: authError } = await supabase.auth.admin.createUser({
+      email,
+      password,
+      email_confirm: true,
+      user_metadata: {
+        name,
+        company_id: companyId, // Passed to trigger if needed, though usually companies are associated differently
+        role: role || 'user'
+      }
+    });
+
+    if (authError) {
+      console.error(`[USER_CREATE_ERROR] Auth failure: ${authError.message}`);
+      return res.status(400).json({ error: authError.message });
+    }
+
+    const newUser = authData.user!;
+
+    // 2. The profile should be created by the SQL trigger 'on_auth_user_created'
+    // We update it with optional fields (phone, name) to ensure consistency
+    // Note: We don't manually insert to profiles to avoid double creation/constraint errors
+    const { data: profile, error: profileError } = await supabase
+      .from('profiles')
+      .update({
+        name: name || email,
+        phone: phone || null,
+        role: role || 'user'
+      })
+      .eq('id', newUser.id)
+      .select()
+      .single();
+
+    if (profileError) {
+      console.error(`[USER_CREATE_ERROR] Profile sync failure: ${profileError.message}`);
+      // Not failing the whole request as the user IS created, but logging it
+    }
+
+    res.json(profile || { id: newUser.id, email: newUser.email });
+
+  } catch (err) {
+    console.error('[USER_CREATE_EXCEPTION]', err);
+    res.status(500).json({ error: 'Erro interno ao criar usuário' });
+  }
 });
 
 app.delete('/api/users/:id', requireMaster, async (req: any, res) => {
@@ -223,16 +389,35 @@ app.delete('/api/users/:id', requireMaster, async (req: any, res) => {
 // =====================
 // SETTINGS Routes (SaaS V2: Scoped to Company)
 // =====================
-app.get('/api/settings', authenticate, async (req: any, res) => {
+// =====================
+// SETTINGS Routes (SaaS V2)
+// =====================
+app.get('/api/settings', async (req: any, res) => {
+  console.log('[DEBUG] Request to /api/settings hit');
+  // Publicly accessible - tries to find company from session, otherwise uses first company
+
+  let companyId: string | null = null;
+  const user = await parseSession(req);
+  if (user) {
+    companyId = user.companyId;
+  } else {
+    // Default to the first company in the system for public visitors
+    const { data: firstCompany } = await supabase.from('companies').select('id').limit(1).single();
+    if (firstCompany) companyId = firstCompany.id;
+  }
+
+  if (!companyId) return res.json({}); // Return empty object if no company exists yet
+
   const { data: company, error } = await supabase
     .from('companies')
     .select('settings')
-    .eq('id', req.user.companyId)
+    .eq('id', companyId)
     .single();
 
-  if (error || !company) return res.status(404).json({ error: 'Configurações não encontradas' });
+  if (error || !company) return res.json({});
   res.json(company.settings || {});
 });
+
 
 app.post('/api/settings', requireMaster, upload.fields([{ name: 'logo' }, { name: 'heroImage' }, { name: 'pixQrCode' }]), async (req: any, res) => {
   const files = req.files as { [fieldname: string]: Express.Multer.File[] };
@@ -296,10 +481,21 @@ app.get('/api/admin/data', requireAdmin, async (req: any, res) => {
 // =====================
 // SERVICES Routes (Multi-tenant)
 // =====================
-app.get('/api/services', authenticate, async (req: any, res) => {
-  const { data } = await supabase.from('services').select('*').eq('company_id', req.user.companyId);
+app.get('/api/services', async (req: any, res) => {
+  let companyId: string | null = null;
+  const user = await parseSession(req);
+  if (user) companyId = user.companyId;
+  else {
+    const { data: firstCompany } = await supabase.from('companies').select('id').limit(1).single();
+    if (firstCompany) companyId = firstCompany.id;
+  }
+
+  if (!companyId) return res.json([]);
+
+  const { data } = await supabase.from('services').select('*').eq('company_id', companyId);
   res.json(data || []);
 });
+
 
 app.post('/api/services', requireAdmin, upload.single('image'), async (req: any, res) => {
   const { title, description } = req.body;
@@ -334,10 +530,21 @@ app.post('/api/services/:id/home-image', requireAdmin, upload.single('homeImage'
 // =====================
 // POSTS Routes (Multi-tenant)
 // =====================
-app.get('/api/posts', authenticate, async (req: any, res) => {
-  const { data } = await supabase.from('posts').select('*').eq('company_id', req.user.companyId).order('createdAt', { ascending: false });
+app.get('/api/posts', async (req: any, res) => {
+  let companyId: string | null = null;
+  const user = await parseSession(req);
+  if (user) companyId = user.companyId;
+  else {
+    const { data: firstCompany } = await supabase.from('companies').select('id').limit(1).single();
+    if (firstCompany) companyId = firstCompany.id;
+  }
+
+  if (!companyId) return res.json([]);
+
+  const { data } = await supabase.from('posts').select('*').eq('company_id', companyId).order('createdAt', { ascending: false });
   res.json(data || []);
 });
+
 
 app.post('/api/posts', requireAdmin, upload.single('image'), async (req: any, res) => {
   const { title, content } = req.body;
@@ -364,16 +571,27 @@ app.post('/api/posts/delete/:id', requireAdmin, async (req: any, res) => {
 // =====================
 // GALLERY Routes (Multi-tenant)
 // =====================
-app.get('/api/gallery', authenticate, async (req: any, res) => {
+app.get('/api/gallery', async (req: any, res) => {
+  let companyId: string | null = null;
+  const user = await parseSession(req);
+  if (user) companyId = user.companyId;
+  else {
+    const { data: firstCompany } = await supabase.from('companies').select('id').limit(1).single();
+    if (firstCompany) companyId = firstCompany.id;
+  }
+
+  if (!companyId) return res.json([]);
+
   const { serviceId } = req.query;
   let query = supabase.from('gallery').select('*')
-    .eq('company_id', req.user.companyId)
+    .eq('company_id', companyId)
     .order('createdAt', { ascending: false });
 
   if (serviceId) query = query.eq('serviceId', serviceId);
   const { data } = await query;
   res.json(data || []);
 });
+
 
 app.post('/api/gallery', requireAdmin, upload.array('images'), async (req: any, res) => {
   const { description, serviceId } = req.body;
@@ -427,12 +645,23 @@ app.post('/api/gallery/bulk-delete', requireAdmin, async (req: any, res) => {
 // =====================
 // TESTIMONIALS Routes (Multi-tenant)
 // =====================
-app.get('/api/testimonials', authenticate, async (req: any, res) => {
+app.get('/api/testimonials', async (req: any, res) => {
+  let companyId: string | null = null;
+  const user = await parseSession(req);
+  if (user) companyId = user.companyId;
+  else {
+    const { data: firstCompany } = await supabase.from('companies').select('id').limit(1).single();
+    if (firstCompany) companyId = firstCompany.id;
+  }
+
+  if (!companyId) return res.json([]);
+
   const { data } = await supabase.from('testimonials').select('*')
-    .eq('company_id', req.user.companyId)
+    .eq('company_id', companyId)
     .order('createdAt', { ascending: false });
   res.json(data || []);
 });
+
 
 app.post('/api/testimonials', requireAdmin, async (req: any, res) => {
   const { author, content, rating } = req.body;
@@ -740,7 +969,8 @@ async function startServer() {
     app.use(vite.middlewares);
   } else {
     app.use(express.static('dist'));
-    app.get('*', (_req, res) => res.sendFile(path.resolve(__dirname, 'dist', 'index.html')));
+    app.get('*', (_req, res) => res.sendFile(path.join(__dirname, 'dist', 'index.html')));
+
   }
 
   app.listen(PORT, '0.0.0.0', () => console.log(`🚀 Server on http://localhost:${PORT}`));

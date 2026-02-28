@@ -301,12 +301,12 @@ export default function Admin() {
                     </div>
 
                     {[
-                      { label: 'Nome da Empresa', key: 'companyName', type: 'text' },
-                      { label: 'WhatsApp (DDD+número)', key: 'whatsapp', type: 'text' },
-                      { label: 'WhatsApp Master (notificações)', key: 'whatsappMaster', type: 'text' },
+                      { label: 'Nome da Empresa *', key: 'companyName', type: 'text' },
+                      { label: 'WhatsApp (DDD+número) *', key: 'whatsapp', type: 'text' },
+                      { label: 'WhatsApp Master (notificações) *', key: 'whatsappMaster', type: 'text' },
                       { label: 'Endereço', key: 'address', type: 'text' },
-                      { label: 'E-mail', key: 'email', type: 'email' },
-                      { label: 'Título Hero', key: 'heroTitle', type: 'text' },
+                      { label: 'E-mail *', key: 'email', type: 'email' },
+                      { label: 'Título Hero *', key: 'heroTitle', type: 'text' },
                       { label: 'Subtítulo Hero', key: 'heroSubtitle', type: 'text' },
                     ].map(f => (
                       <div key={f.key}>
@@ -411,14 +411,14 @@ export default function Admin() {
               {activeTab === 'services' && (
                 <div className="space-y-12 animate-in fade-in duration-500">
                   <h2 className="text-2xl font-bold">Gerenciar Serviços</h2>
-                  <form onSubmit={handleAddService} className="bg-slate-50 p-8 rounded-3xl space-y-6">
-                    <h3 className="font-bold flex items-center gap-2"><Plus className="w-5 h-5 text-brand-primary" />Novo Serviço</h3>
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                      <input required placeholder="Título" value={newService.title} onChange={e => setNewService({ ...newService, title: e.target.value })} className="bg-white border-none rounded-2xl px-6 py-4 focus:ring-2 focus:ring-brand-primary transition-all outline-none" />
-                      <input type="file" accept="image/*" onChange={e => setNewService({ ...newService, image: e.target.files?.[0] || null })} className="bg-white border-none rounded-2xl px-6 py-4" />
+                  <form onSubmit={handleAddService} className="bg-slate-50 p-6 rounded-3xl space-y-4 mb-8">
+                    <h3 className="font-bold">Adicionar Novo Serviço</h3>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <input placeholder="Título do Serviço *" value={newService.title} onChange={e => setNewService({ ...newService, title: e.target.value })} required className={inputCls} />
+                      <input type="file" accept="image/*" onChange={e => setNewService({ ...newService, image: e.target.files?.[0] || null })} className={inputCls} />
                     </div>
-                    <textarea required rows={3} placeholder="Descrição" value={newService.description} onChange={e => setNewService({ ...newService, description: e.target.value })} className="w-full bg-white border-none rounded-2xl px-6 py-4 focus:ring-2 focus:ring-brand-primary transition-all outline-none" />
-                    <button type="submit" className="bg-brand-primary text-white px-8 py-4 rounded-2xl font-bold hover:opacity-90 cursor-pointer">Adicionar Serviço</button>
+                    <textarea placeholder="Descrição curta *" rows={3} value={newService.description} onChange={e => setNewService({ ...newService, description: e.target.value })} required className={inputCls} />
+                    <button type="submit" className={btnPrimary}><Plus className="w-5 h-5" /> Adicionar</button>
                   </form>
                   <div className="grid gap-4">
                     {services.map(s => (
@@ -452,14 +452,14 @@ export default function Admin() {
               {activeTab === 'posts' && (
                 <div className="space-y-12 animate-in fade-in duration-500">
                   <h2 className="text-2xl font-bold">Publicações do Blog</h2>
-                  <form onSubmit={handleAddPost} className="bg-slate-50 p-8 rounded-3xl space-y-6">
-                    <h3 className="font-bold flex items-center gap-2"><Plus className="w-5 h-5 text-brand-primary" />Nova Publicação</h3>
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                      <input required placeholder="Título" value={newPost.title} onChange={e => setNewPost({ ...newPost, title: e.target.value })} className="bg-white border-none rounded-2xl px-6 py-4 focus:ring-2 focus:ring-brand-primary transition-all outline-none" />
-                      <input type="file" accept="image/*" onChange={e => setNewPost({ ...newPost, image: e.target.files?.[0] || null })} className="bg-white border-none rounded-2xl px-6 py-4" />
+                  <form onSubmit={handleAddPost} className="bg-slate-50 p-6 rounded-3xl space-y-4 mb-8">
+                    <h3 className="font-bold">Novo Post no Blog</h3>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <input placeholder="Título do Post *" value={newPost.title} onChange={e => setNewPost({ ...newPost, title: e.target.value })} required className={inputCls} />
+                      <input type="file" accept="image/*" onChange={e => setNewPost({ ...newPost, image: e.target.files?.[0] || null })} className={inputCls} />
                     </div>
-                    <textarea required rows={6} placeholder="Conteúdo..." value={newPost.content} onChange={e => setNewPost({ ...newPost, content: e.target.value })} className="w-full bg-white border-none rounded-2xl px-6 py-4 focus:ring-2 focus:ring-brand-primary transition-all outline-none" />
-                    <button type="submit" className="bg-brand-primary text-white px-8 py-4 rounded-2xl font-bold cursor-pointer">Publicar</button>
+                    <textarea placeholder="Conteúdo do post... *" rows={5} value={newPost.content} onChange={e => setNewPost({ ...newPost, content: e.target.value })} required className={inputCls} />
+                    <button type="submit" className={btnPrimary}><Plus className="w-5 h-5" /> Publicar</button>
                   </form>
                   <div className="grid gap-4">
                     {posts.map(p => (

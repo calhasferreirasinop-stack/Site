@@ -14,7 +14,7 @@ interface Props {
     showToast: (msg: string, type: 'success' | 'error') => void;
 }
 
-const emptyForm = { username: '', password: '', name: '', email: '', phone: '', role: 'user', active: true };
+const emptyForm = { email: '', password: '', name: '', phone: '', role: 'user', active: true };
 
 export default function UsersTab({ users, currentUser, onSave, showToast }: Props) {
     const [editing, setEditing] = useState<any>(null);
@@ -24,13 +24,13 @@ export default function UsersTab({ users, currentUser, onSave, showToast }: Prop
     const startNew = () => { setEditing('new'); setForm(emptyForm); };
     const startEdit = (u: any) => {
         setEditing(u.id);
-        setForm({ username: u.username, password: '', name: u.name || '', email: u.email || '', phone: u.phone || '', role: u.role, active: u.active });
+        setForm({ email: u.email || '', password: '', name: u.name || '', phone: u.phone || '', role: u.role, active: u.active });
     };
     const cancel = () => { setEditing(null); setForm(emptyForm); };
 
     const handleSave = async () => {
-        if (!form.username) return showToast('Username obrigatório', 'error');
-        if (editing === 'new' && !form.password) return showToast('Senha obrigatória', 'error');
+        if (!form.email) return showToast('E-mail (Login) é obrigatório', 'error');
+        if (editing === 'new' && !form.password) return showToast('Senha é obrigatória', 'error');
         setLoading(true);
         try {
             const url = editing === 'new' ? '/api/users' : `/api/users/${editing}`;
@@ -50,7 +50,7 @@ export default function UsersTab({ users, currentUser, onSave, showToast }: Prop
         } finally { setLoading(false); }
     };
 
-    const handleDelete = async (id: number) => {
+    const handleDelete = async (id: string) => {
         if (!confirm('Excluir usuário?')) return;
         const res = await fetch(`/api/users/${id}`, { method: 'DELETE', credentials: 'include' });
         if (res.ok) { showToast('Usuário excluído!', 'success'); onSave(); }
@@ -60,7 +60,7 @@ export default function UsersTab({ users, currentUser, onSave, showToast }: Prop
     const toggleActive = async (u: any) => {
         await fetch(`/api/users/${u.id}`, {
             method: 'PUT', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ active: !u.active, name: u.name, email: u.email, phone: u.phone }),
+            body: JSON.stringify({ active: !u.active, name: u.name, phone: u.phone, email: u.email }),
             credentials: 'include',
         });
         onSave();
@@ -82,9 +82,10 @@ export default function UsersTab({ users, currentUser, onSave, showToast }: Prop
                     <h3 className="font-bold text-slate-900">{editing === 'new' ? 'Novo Usuário' : 'Editar Usuário'}</h3>
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                         <div>
-                            <label className="text-xs font-bold text-slate-500 uppercase ml-1 block mb-1">Username *</label>
-                            <input value={form.username} onChange={e => setForm({ ...form, username: e.target.value })}
+                            <label className="text-xs font-bold text-slate-500 uppercase ml-1 block mb-1">E-mail / Login *</label>
+                            <input value={form.email} onChange={e => setForm({ ...form, email: e.target.value })}
                                 disabled={editing !== 'new'}
+                                type="email"
                                 className="w-full bg-white border border-slate-200 rounded-xl px-4 py-3 text-sm focus:ring-2 focus:ring-brand-primary outline-none disabled:opacity-50" />
                         </div>
                         <div>
@@ -93,13 +94,8 @@ export default function UsersTab({ users, currentUser, onSave, showToast }: Prop
                                 className="w-full bg-white border border-slate-200 rounded-xl px-4 py-3 text-sm focus:ring-2 focus:ring-brand-primary outline-none" />
                         </div>
                         <div>
-                            <label className="text-xs font-bold text-slate-500 uppercase ml-1 block mb-1">Nome Completo</label>
+                            <label className="text-xs font-bold text-slate-500 uppercase ml-1 block mb-1">Nome Completo *</label>
                             <input value={form.name} onChange={e => setForm({ ...form, name: e.target.value })}
-                                className="w-full bg-white border border-slate-200 rounded-xl px-4 py-3 text-sm focus:ring-2 focus:ring-brand-primary outline-none" />
-                        </div>
-                        <div>
-                            <label className="text-xs font-bold text-slate-500 uppercase ml-1 block mb-1">E-mail</label>
-                            <input type="email" value={form.email} onChange={e => setForm({ ...form, email: e.target.value })}
                                 className="w-full bg-white border border-slate-200 rounded-xl px-4 py-3 text-sm focus:ring-2 focus:ring-brand-primary outline-none" />
                         </div>
                         <div>
@@ -108,14 +104,14 @@ export default function UsersTab({ users, currentUser, onSave, showToast }: Prop
                                 className="w-full bg-white border border-slate-200 rounded-xl px-4 py-3 text-sm focus:ring-2 focus:ring-brand-primary outline-none" />
                         </div>
                         <div>
-                            <label className="text-xs font-bold text-slate-500 uppercase ml-1 block mb-2">Papel / Permissão</label>
+                            <label className="text-xs font-bold text-slate-500 uppercase ml-1 block mb-2">Papel / Permissão *</label>
                             <div className="flex gap-2">
                                 {(['user', 'admin', ...(currentUser?.role === 'master' ? ['master'] : [])] as string[]).map(r => {
                                     const cfg = ROLE_CONFIG[r as keyof typeof ROLE_CONFIG];
                                     return (
                                         <button key={r} onClick={() => setForm({ ...form, role: r })}
                                             className={`flex-1 py-2 px-3 rounded-xl text-xs font-bold border-2 transition-all cursor-pointer
-                        ${form.role === r ? 'border-brand-primary bg-brand-primary/10 text-brand-primary' : 'border-slate-200 text-slate-500 hover:border-slate-300'}`}>
+                                                ${form.role === r ? 'border-brand-primary bg-brand-primary/10 text-brand-primary' : 'border-slate-200 text-slate-500 hover:border-slate-300'}`}>
                                             {cfg.label}
                                         </button>
                                     );
@@ -148,11 +144,11 @@ export default function UsersTab({ users, currentUser, onSave, showToast }: Prop
                             </div>
                             <div className="flex-1 min-w-0">
                                 <div className="flex items-center gap-2 flex-wrap">
-                                    <span className="font-bold text-slate-900">{u.name || u.username}</span>
+                                    <span className="font-bold text-slate-900">{u.name || u.email}</span>
                                     <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${cfg.color}`}>{cfg.label}</span>
                                     {!u.active && <span className="text-xs text-slate-400 font-bold bg-slate-100 px-2 py-0.5 rounded-full">Inativo</span>}
                                 </div>
-                                <p className="text-xs text-slate-400 mt-0.5">@{u.username}{u.email ? ` · ${u.email}` : ''}</p>
+                                <p className="text-xs text-slate-400 mt-0.5">{u.email}{u.phone ? ` · ${u.phone}` : ''}</p>
                             </div>
                             {u.id !== currentUser?.id && (
                                 <div className="flex gap-2">

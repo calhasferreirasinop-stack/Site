@@ -10,6 +10,7 @@ import Gallery from './pages/Gallery';
 import Admin from './pages/Admin';
 import Login from './pages/Login';
 import Orcamento from './pages/Orcamento';
+import TestHarness from './pages/TestHarness';
 
 function AppContent() {
   const location = useLocation();
@@ -39,6 +40,11 @@ function AppContent() {
           <Route path="/central" element={
             <ErrorBoundary>
               <Admin />
+            </ErrorBoundary>
+          } />
+          <Route path="/harness/*" element={
+            <ErrorBoundary>
+              <TestHarness />
             </ErrorBoundary>
           } />
           <Route path="*" element={<Navigate to="/" replace />} />
