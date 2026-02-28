@@ -37,7 +37,6 @@ export default function UsersTab({ users, currentUser, onSave, showToast }: Prop
             const body = editing === 'new' ? form : { ...form, password: form.password || undefined };
             const payload = {
                 ...form,
-                email: form.username.includes('@') ? form.username : `${form.username}@ferreira.com`,
                 password: form.password || undefined
             };
             const res = await fetch(url, {
@@ -154,7 +153,7 @@ export default function UsersTab({ users, currentUser, onSave, showToast }: Prop
                                     <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${cfg.color}`}>{cfg.label}</span>
                                     {!u.active && <span className="text-xs text-slate-400 font-bold bg-slate-100 px-2 py-0.5 rounded-full">Inativo</span>}
                                 </div>
-                                <p className="text-xs text-slate-400 mt-0.5">{u.email}{u.phone ? ` · ${u.phone}` : ''}</p>
+                                <p className="text-xs text-slate-400 mt-0.5">{u.phone || ''}</p>
                             </div>
                             {u.id !== currentUser?.id && (
                                 <div className="flex gap-2">

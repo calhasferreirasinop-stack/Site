@@ -8,6 +8,7 @@ export type RiskDirection =
 export interface Risk {
     direction: RiskDirection;
     sizeCm: number;
+    slopeData?: { side: 'D' | 'E', h1: number, h2: number };
 }
 
 // Angle change relative to current heading (degrees)
@@ -93,7 +94,7 @@ export default function BendCanvas({ risks, maxWidthCm = 120, svgRef, exportMode
     // ── Dynamic scaling ──────────────────────────────────────────────────────
     const CANVAS_W = 460;
     const CANVAS_H = 220;
-    const PADDING = 36;
+    const PADDING = 45; // Increased padding for labels
 
     const xs = points.map(p => p.x);
     const ys = points.map(p => p.y);
@@ -134,7 +135,7 @@ export default function BendCanvas({ risks, maxWidthCm = 120, svgRef, exportMode
                     width="100%"
                     viewBox={`0 0 ${CANVAS_W} ${CANVAS_H}`}
                     className="w-full"
-                    style={{ minHeight: 160, maxHeight: 240 }}
+                    style={{ minHeight: 180, maxHeight: 260 }}
                     xmlns="http://www.w3.org/2000/svg"
                 >
                     {/* Subtle grid — HIDDEN in export mode */}
@@ -165,7 +166,6 @@ export default function BendCanvas({ risks, maxWidthCm = 120, svgRef, exportMode
                     {/* Points + dimension labels */}
                     {scaled.map((pt, i) => (
                         <g key={i}>
-                            {/* Dimension labels only - no dots */}
                             {/* Mid-segment label — ALWAYS shown */}
                             {i > 0 && risks[i - 1] && (() => {
                                 const prev = scaled[i - 1];
@@ -175,14 +175,51 @@ export default function BendCanvas({ risks, maxWidthCm = 120, svgRef, exportMode
                                 const dx = pt.x - prev.x;
                                 const dy = pt.y - prev.y;
                                 const len = Math.sqrt(dx * dx + dy * dy) || 1;
-                                const nx = -dy / len * 14;
-                                const ny = dx / len * 14;
+                                const nx = -dy / len * 16;
+                                const ny = dx / len * 16;
+
+                                // Calculate if labels would overlap (too close)
+                                const isTinySegment = len < 10;
+
                                 return (
-                                    <text x={mx + nx} y={my + ny} textAnchor="middle"
-                                        fill="rgba(255,255,255,0.85)" fontSize={exportMode ? "11" : "10"} fontWeight="bold"
-                                        style={{ paintOrder: 'stroke', stroke: '#1e293b', strokeWidth: 3 }}>
-                                        {risks[i - 1].sizeCm}cm
-                                    </text>
+                                    <g key={i}>
+                                        {/* Per-Risk Lateral Slope visual indicators */}
+                                        {risks[i - 1].slopeData && (
+                                            <>
+                                                {/* Transversal line in the middle of the segment */}
+                                                <line x1={mx - ny / 3} y1={my + nx / 3} x2={mx + ny / 3} y2={my - nx / 3}
+                                                    stroke="#f59e0b" strokeWidth="2.5" strokeLinecap="round" />
+
+                                                {/* D or E indicator */}
+                                                <text x={mx} y={my} textAnchor="middle" dominantBaseline="middle"
+                                                    fill="#f59e0b" fontSize="12" fontWeight="black"
+                                                    style={{ paintOrder: 'stroke', stroke: '#1e293b', strokeWidth: 2 }}>
+                                                    {risks[i - 1].slopeData!.side}
+                                                </text>
+
+                                                {/* H1 and H2 at the ends of the segment */}
+                                                <text x={prev.x + nx * (isTinySegment ? 1.5 : 1.2)} y={prev.y + ny * (isTinySegment ? 1.5 : 1.2)} textAnchor="middle" dominantBaseline="middle"
+                                                    fill="#fbbf24" fontSize="10" fontStyle="italic" fontWeight="black"
+                                                    style={{ paintOrder: 'stroke', stroke: '#1e293b', strokeWidth: 2 }}>
+                                                    {risks[i - 1].slopeData!.h1}
+                                                </text>
+                                                <text x={pt.x + nx * (isTinySegment ? 1.5 : 1.2)} y={pt.y + ny * (isTinySegment ? 1.5 : 1.2)} textAnchor="middle" dominantBaseline="middle"
+                                                    fill="#fbbf24" fontSize="10" fontStyle="italic" fontWeight="black"
+                                                    style={{ paintOrder: 'stroke', stroke: '#1e293b', strokeWidth: 2 }}>
+                                                    {risks[i - 1].slopeData!.h2}
+                                                </text>
+                                            </>
+                                        )}
+
+                                        {!risks[i - 1].slopeData && (
+                                            <text x={mx + nx * (isTinySegment ? 1.4 : 1)} y={my + ny * (isTinySegment ? 1.4 : 1)}
+                                                textAnchor="middle" dominantBaseline="middle"
+                                                fill="rgba(255,255,255,0.95)" fontSize={exportMode ? "11" : "10"} fontWeight="black"
+                                                style={{ paintOrder: 'stroke', stroke: '#1e293b', strokeWidth: 3 }}>
+                                                {risks[i - 1].sizeCm}cm
+                                            </text>
+                                        )}
+                                    </g>
                                 );
                             })()}
                         </g>
@@ -192,6 +229,16 @@ export default function BendCanvas({ risks, maxWidthCm = 120, svgRef, exportMode
                     {!exportMode && scaled.length > 0 && (
                         <text x={scaled[0].x} y={scaled[0].y - 14} textAnchor="middle"
                             fill="#48bb78" fontSize="9" fontWeight="bold">INÍCIO</text>
+                    )}
+
+                    {/* Real Sum Circle — Facilitate execution (Moved fuera del dibujo) */}
+                    {totalWidthCm > 0 && (
+                        <g transform={`translate(${CANVAS_W - 40}, ${CANVAS_H - 40})`}>
+                            <circle r="22" fill="#1e293b" stroke={strokeColor} strokeWidth="3" opacity="0.9" />
+                            <text textAnchor="middle" dominantBaseline="middle" fill="#fff" fontSize="14" fontWeight="black">
+                                {totalWidthCm}
+                            </text>
+                        </g>
                     )}
 
                     {/* Empty state */}

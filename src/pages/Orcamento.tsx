@@ -50,9 +50,8 @@ function calcM2(roundedWidthCm: number, lengths: string[]) {
 async function captureSvg(el: SVGSVGElement): Promise<string> {
     return new Promise(resolve => {
         try {
-            // Clone SVG and remove edit-mode elements (circles, INÍCIO label)
+            // Clone SVG and remove edit-mode elements (INÍCIO label, grid)
             const clone = el.cloneNode(true) as SVGSVGElement;
-            clone.querySelectorAll('circle').forEach(c => c.remove());
             // Remove INÍCIO text and info bar text
             clone.querySelectorAll('text').forEach(t => {
                 const txt = t.textContent?.trim() || '';
@@ -62,6 +61,10 @@ async function captureSvg(el: SVGSVGElement): Promise<string> {
             clone.querySelectorAll('line').forEach(l => {
                 const s = l.getAttribute('stroke') || '';
                 if (s.includes('0.035')) l.remove();
+            });
+            // Remove real sum circle for export
+            clone.querySelectorAll('g').forEach(g => {
+                if (g.textContent?.includes('SOMA REAL')) g.remove();
             });
             const blob = new Blob([new XMLSerializer().serializeToString(clone)], { type: 'image/svg+xml;charset=utf-8' });
             const url = URL.createObjectURL(blob);
@@ -94,7 +97,7 @@ export default function Orcamento() {
     const [pixKeys, setPixKeys] = useState<any[]>([]);
     const [savingDraft, setSavingDraft] = useState(false);
     const [libraryZoom, setLibraryZoom] = useState<SavedBend | null>(null);
-    const [editingQuoteId, setEditingQuoteId] = useState<number | null>(null);
+    const [editingQuoteId, setEditingQuoteId] = useState<string | number | null>(null);
     const [reportQuote, setReportQuote] = useState<any | null>(null);
     const [reportBends, setReportBends] = useState<any[]>([]);
 
@@ -111,6 +114,58 @@ export default function Orcamento() {
 
     // Preserved lengths when editing existing bend
     const [editingBendLengths, setEditingBendLengths] = useState<string[] | null>(null);
+
+    // Otimização de Cortes
+    const [optimization, setOptimization] = useState<any[]>([]);
+
+    const calculateOptimization = (allBends: Bend[]) => {
+        const BIN_CAPACITY = 1.2; // 1.20m sheet
+
+        // 1. Collect all cuts and split those > 1.20m
+        let pieces: { bendId: string, originalIdx: number, length: number }[] = [];
+        allBends.forEach(b => {
+            b.lengths.forEach((lenStr, idx) => {
+                let len = parseFloat(lenStr);
+                if (isNaN(len) || len <= 0) return;
+
+                // If its a long piece, we basically just keep track of it
+                // FFD on lengths into 1.2m bins
+                while (len > BIN_CAPACITY) {
+                    pieces.push({ bendId: b.id, originalIdx: idx, length: BIN_CAPACITY });
+                    len -= BIN_CAPACITY;
+                }
+                if (len > 0) {
+                    pieces.push({ bendId: b.id, originalIdx: idx, length: len });
+                }
+            });
+        });
+
+        // 2. Sort descending for FFD
+        pieces.sort((a, b) => b.length - a.length);
+
+        // 3. First Fit
+        let bins: typeof pieces[] = [];
+        pieces.forEach(p => {
+            let found = false;
+            for (let b of bins) {
+                let currentTotal = b.reduce((s, x) => s + x.length, 0);
+                if (currentTotal + p.length <= BIN_CAPACITY + 0.001) { // Floating point leeway
+                    b.push(p);
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) bins.push([p]);
+        });
+
+        return bins;
+    };
+
+    useEffect(() => {
+        if (step === 'summary' || (step === 'bends' && bends.length > 0)) {
+            setOptimization(calculateOptimization(bends));
+        }
+    }, [bends, step]);
 
     // Post-confirm
     const [showPostConfirm, setShowPostConfirm] = useState(false);
@@ -129,6 +184,12 @@ export default function Orcamento() {
     const [savedQuote, setSavedQuote] = useState<any>(null);
     const [proofFile, setProofFile] = useState<File | null>(null);
     const [uploadingProof, setUploadingProof] = useState(false);
+
+    // Caída Lateral State
+    const [isLateralSlope, setIsLateralSlope] = useState(false);
+    const [slopeSide, setSlopeSide] = useState<'D' | 'E'>('D');
+    const [slopeH1, setSlopeH1] = useState('');
+    const [slopeH2, setSlopeH2] = useState('');
 
     const svgRef = useRef<SVGSVGElement>(null);
     const topRef = useRef<HTMLDivElement>(null);
@@ -199,15 +260,34 @@ export default function Orcamento() {
     };
 
     const handleAddRisk = () => {
-        const size = parseFloat(pendingSize);
+        let size = parseFloat(pendingSize);
         if (!pendingDir) { setSizeError('Selecione a direção'); return; }
+
+        let riskSlope = undefined;
+        if (isLateralSlope) {
+            const h1 = parseFloat(slopeH1) || 0;
+            const h2 = parseFloat(slopeH2) || 0;
+            if (h1 <= 0 || h2 <= 0) { setSizeError('Informe as duas alturas da caída'); return; }
+            size = Math.max(h1, h2);
+            riskSlope = { side: slopeSide, h1, h2 };
+        }
+
         if (!size || size <= 0) { setSizeError('Informe um tamanho válido'); return; }
         if (isReversal(pendingDir, size)) { setSizeError('⚠ Este risco anula o anterior e não é permitido.'); return; }
         if (curWidth + size > MAX_W) { setSizeError(`Excede ${MAX_W} cm. Disponível: ${(MAX_W - curWidth).toFixed(1)} cm`); return; }
+
         setSizeError('');
-        setCurrentRisks(prev => [...prev, { direction: pendingDir, sizeCm: size }]);
+        setCurrentRisks(prev => [...prev, {
+            direction: pendingDir,
+            sizeCm: size,
+            slopeData: riskSlope
+        }]);
         setPendingDir(null);
         setPendingSize('');
+        // Also clear slope state after adding
+        setIsLateralSlope(false);
+        setSlopeH1('');
+        setSlopeH2('');
     };
 
     const commitEditSize = (idx: number) => {
@@ -235,7 +315,17 @@ export default function Orcamento() {
         let svgDataUrl = '';
         if (svgRef.current) svgDataUrl = await captureSvg(svgRef.current);
         const savedLengths = editingBendLengths && editingBendLengths.some(l => parseFloat(l) > 0) ? editingBendLengths : [''];
-        const newBend: Bend = { id: uid(), risks: [...currentRisks], totalWidthCm: curWidth, roundedWidthCm: curRounded, lengths: savedLengths, totalLengthM: 0, m2: 0, svgDataUrl };
+
+        const newBend: Bend = {
+            id: uid(),
+            risks: [...currentRisks],
+            totalWidthCm: curWidth,
+            roundedWidthCm: curRounded,
+            lengths: savedLengths,
+            totalLengthM: 0,
+            m2: 0,
+            svgDataUrl,
+        };
         // Recalc m2 if lengths were preserved
         if (savedLengths !== null && savedLengths.some(l => parseFloat(l) > 0)) {
             const calc = calcM2(curRounded, savedLengths);
@@ -247,9 +337,14 @@ export default function Orcamento() {
         setCurrentRisks([]);
         setPendingDir(null);
         setPendingSize('');
+        setIsLateralSlope(false);
+        setSlopeH1('');
+        setSlopeH2('');
         setEditingBendLengths(null);
         setShowPostConfirm(true);
         setShowLibrary(false);
+        // Recalc optimization
+        setOptimization(calculateOptimization([...bends, newBend]));
         setTimeout(() => metersRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 150);
     };
 
@@ -357,6 +452,7 @@ export default function Orcamento() {
                 totalLengthM: b.totalLengthM || 0,
                 m2: b.m2 || 0,
                 svgDataUrl: b.svgDataUrl || '',
+                slopeData: b.slopeData || undefined,
             }));
             setBends(mapped);
             setClientName(q.clientName || '');
@@ -389,7 +485,7 @@ export default function Orcamento() {
             const cuts = Array.isArray(b.lengths) ? b.lengths.filter((l: any) => parseFloat(l) > 0) : [];
             const cutsHtml = cuts.length > 0 ? `<table class="cuts-table"><thead><tr><th colspan="2">Cortes</th></tr></thead><tbody>${cuts.map((c: any, ci: number) => `<tr><td>Corte ${ci + 1}</td><td class="cut-val">${parseFloat(c).toFixed(2)}m</td></tr>`).join('')}<tr class="cut-total"><td>Metros corridos</td><td class="cut-val">${(b.totalLengthM || 0).toFixed(2)}m</td></tr></tbody></table>` : '';
             const img = b.svgDataUrl ? `<img src="${b.svgDataUrl}" style="width:100%;max-height:180px;object-fit:contain;background:#1e293b;border-radius:8px"/>` : '';
-            return `<div style="margin:16px 0;page-break-inside:avoid"><p style="font-weight:bold;margin:0 0 8px;font-size:14px">Dobra #${i + 1} \u2014 <span class="medida">${((b.roundedWidthCm || 0) / 100).toFixed(2)}m larg.</span></p><div style="display:flex;gap:16px;align-items:flex-start">${img ? `<div style="flex:1">${img}</div>` : ''}${cutsHtml ? `<div style="flex:0 0 200px">${cutsHtml}</div>` : ''}</div></div>`;
+            return `<div style="margin:16px 0;page-break-inside:avoid"><p style="font-weight:bold;margin:0 0 8px;font-size:14px">Dobra #${i + 1} — <span class="medida">${((b.roundedWidthCm || 0) / 100).toFixed(2)}m larg.</span></p><div style="display:flex;gap:16px;align-items:flex-start">${img ? `<div style="flex:1">${img}</div>` : ''}${cutsHtml ? `<div style="flex:0 0 200px">${cutsHtml}</div>` : ''}</div></div>`;
         }).join('');
         const rows = qBends.map((b: any, i: number) => {
             const lengths = Array.isArray(b.lengths) ? b.lengths : [];
@@ -400,7 +496,7 @@ export default function Orcamento() {
         }).join('');
         const tM2 = parseFloat(q.totalM2 || 0);
         const tVal = parseFloat(q.finalValue || q.totalValue || 0);
-        const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Or\u00e7amento #${q.id}</title><style>
+        const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Orçamento #${q.id}</title><style>
 body{font-family:Arial,sans-serif;padding:24px;color:#111;max-width:900px;margin:auto}
 h1{font-size:20px;margin-bottom:4px}
 .status{display:inline-block;background:#fef3c7;color:#92400e;border:2px solid #f59e0b;font-weight:bold;font-size:13px;padding:6px 14px;border-radius:8px;margin:8px 0}
@@ -424,7 +520,7 @@ tr:nth-child(even) td{background:#f8fafc}
 @media print{body{padding:8px}}
 </style></head><body>
 ${settings.reportLogo || settings.reportCompanyName ? `<div class="report-header">${settings.reportLogo ? `<img src="${settings.reportLogo}" alt="Logo"/>` : ''}<div><strong style="font-size:16px">${settings.reportCompanyName || ''}</strong><div class="info">${[settings.reportPhone, settings.reportEmail].filter(Boolean).join(' | ')}${settings.reportAddress ? `<br/>${settings.reportAddress}` : ''}${settings.reportHeaderText ? `<br/>${settings.reportHeaderText}` : ''}</div></div></div>` : ''}
-<h1>Or\u00e7amento #${q.id} \u2014 ${settings.reportCompanyName || 'Ferreira Calhas'}</h1>
+<h1>Orçamento #${q.id} — ${settings.reportCompanyName || 'Ferreira Calhas'}</h1>
 <p>Cliente: <b>${q.clientName || ''}</b>${q.notes ? ` | Obs: ${q.notes}` : ''}</p>
 <div class="status">\u23f3 STATUS: ${(STATUS_LABELS[q.status]?.label || q.status).toUpperCase()}</div>
 ${imgRows}
@@ -470,10 +566,10 @@ ${settings.reportFooterText ? `<div class="report-footer">${settings.reportFoote
             const cuts = b.lengths.filter(l => parseFloat(l) > 0);
             const cutsHtml = cuts.length > 0 ? `<table class="cuts-table"><thead><tr><th colspan="2">Cortes</th></tr></thead><tbody>${cuts.map((c, ci) => `<tr><td>Corte ${ci + 1}</td><td class="cut-val">${parseFloat(c).toFixed(2)}m</td></tr>`).join('')}<tr class="cut-total"><td>Metros corridos</td><td class="cut-val">${b.totalLengthM.toFixed(2)}m</td></tr></tbody></table>` : '';
             const img = b.svgDataUrl ? `<img src="${b.svgDataUrl}" style="width:100%;max-height:180px;object-fit:contain;background:#1e293b;border-radius:8px"/>` : '';
-            return `<div style="margin:16px 0;page-break-inside:avoid"><p style="font-weight:bold;margin:0 0 8px;font-size:14px">Dobra #${i + 1} \u2014 <span class="medida">${(b.roundedWidthCm / 100).toFixed(2)}m larg.</span></p><div style="display:flex;gap:16px;align-items:flex-start">${img ? `<div style="flex:1">${img}</div>` : ''}${cutsHtml ? `<div style="flex:0 0 200px">${cutsHtml}</div>` : ''}</div></div>`;
+            return `<div style="margin:16px 0;page-break-inside:avoid"><p style="font-weight:bold;margin:0 0 8px;font-size:14px">Dobra #${i + 1} — <span class="medida">${(b.roundedWidthCm / 100).toFixed(2)}m larg.</span></p><div style="display:flex;gap:16px;align-items:flex-start">${img ? `<div style="flex:1">${img}</div>` : ''}${cutsHtml ? `<div style="flex:0 0 200px">${cutsHtml}</div>` : ''}</div></div>`;
         }).join('');
         const rows = bends.map((b, i) => `<tr><td>#${i + 1}</td><td>${b.risks.map(r => `${DIRECTION_ICONS[r.direction]} ${r.sizeCm}cm`).join(', ')}</td><td class="medida">${(b.roundedWidthCm / 100).toFixed(2)}m</td><td class="metros">${b.lengths.filter(l => parseFloat(l) > 0).join('+')}=${b.totalLengthM.toFixed(2)}m</td><td>${b.m2.toFixed(4)}</td><td>R$${(b.m2 * pricePerM2).toFixed(2)}</td></tr>`).join('');
-        const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Or\u00e7amento Ferreira Calhas</title><style>
+        const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Orçamento Ferreira Calhas</title><style>
 body{font-family:Arial,sans-serif;padding:24px;color:#111;max-width:900px;margin:auto}
 h1{font-size:20px;margin-bottom:4px}
 .status{display:inline-block;background:#fef3c7;color:#92400e;border:2px solid #f59e0b;font-weight:bold;font-size:13px;padding:6px 14px;border-radius:8px;margin:8px 0}
@@ -497,7 +593,7 @@ tr:nth-child(even) td{background:#f8fafc}
 @media print{body{padding:8px}}
 </style></head><body>
 ${settings.reportLogo || settings.reportCompanyName ? `<div class="report-header">${settings.reportLogo ? `<img src="${settings.reportLogo}" alt="Logo"/>` : ''}<div><strong style="font-size:16px">${settings.reportCompanyName || ''}</strong><div class="info">${[settings.reportPhone, settings.reportEmail].filter(Boolean).join(' | ')}${settings.reportAddress ? `<br/>${settings.reportAddress}` : ''}${settings.reportHeaderText ? `<br/>${settings.reportHeaderText}` : ''}</div></div></div>` : ''}
-<h1>Or\u00e7amento \u2014 ${settings.reportCompanyName || 'Ferreira Calhas'}</h1>
+<h1>Orçamento — ${settings.reportCompanyName || 'Ferreira Calhas'}</h1>
 <p style="color:#555;font-size:12px">${new Date().toLocaleDateString('pt-BR', { day: '2-digit', month: 'long', year: 'numeric' })}</p>
 <p>Cliente: <b>${clientName || user?.name || user?.username || ''}</b>${notes ? ` | Obs: ${notes}` : ''}</p>
 <div class="status">\u23f3 STATUS: AGUARDANDO PAGAMENTO</div>
@@ -714,30 +810,31 @@ ${settings.reportFooterText ? `<div class="report-footer">${settings.reportFoote
                                 const st = STATUS_LABELS[q.status] || STATUS_LABELS.pending;
                                 return (
                                     <div key={q.id} className="bg-white/5 border border-white/10 rounded-2xl p-4 flex items-center gap-4 flex-wrap">
-                                        <span className="text-white/40 font-black text-sm">#{q.id.substring(0, 8)}</span>
+                                        <span className="text-white/40 font-black text-sm">#{String(q.id).substring(0, 8)}</span>
                                         <div className="flex-1 min-w-0">
                                             <p className="text-white font-bold">{q.clientName || q.client?.name || 'Cliente'}</p>
                                             <p className="text-slate-400 text-xs">{q.createdAt ? new Date(q.createdAt).toLocaleString('pt-BR') : ''}{q.notes ? ` · ${q.notes.substring(0, 50)}` : ''}</p>
                                         </div>
                                         <span className={`text-xs font-bold px-3 py-1 rounded-full text-white ${st.color}`}>{st.label}</span>
                                         <p className="text-white font-black">R$ {parseFloat(q.finalValue || q.totalValue || 0).toFixed(2)}</p>
-                                        {q.status !== 'paid' && q.status !== 'cancelled' && q.status !== 'finished' && q.status !== 'in_production' && (
-                                            <button onClick={() => handleEditQuote(q)}
+                                        {q.status !== 'paid' && q.status !== 'cancelled' && (
+                                            <button onClick={(e) => { e.stopPropagation(); handleEditQuote(q); }}
                                                 className="text-xs text-blue-400 hover:text-blue-300 font-bold px-2 py-1 border border-blue-400/30 rounded-lg cursor-pointer">
                                                 ✏ Editar
                                             </button>
                                         )}
-                                        {q.status !== 'paid' && q.status !== 'cancelled' && q.status !== 'finished' && (
-                                            <button onClick={() => handleCancelQuote(q.id)}
+                                        {q.status !== 'paid' && q.status !== 'cancelled' && (
+                                            <button onClick={(e) => { e.stopPropagation(); handleCancelQuote(q.id); }}
                                                 className="text-xs text-red-400 hover:text-red-300 font-bold px-2 py-1 border border-red-400/30 rounded-lg cursor-pointer">
                                                 Cancelar
                                             </button>
                                         )}
-                                        <button onClick={() => handleViewReport(q)}
+                                        <button onClick={(e) => { e.stopPropagation(); handleViewReport(q); }}
                                             className="text-xs text-emerald-400 hover:text-emerald-300 font-bold px-2 py-1 border border-emerald-400/30 rounded-lg cursor-pointer">
                                             👁️ Relatório
                                         </button>
-                                        <button onClick={async () => {
+                                        <button onClick={async (e) => {
+                                            e.stopPropagation();
                                             try {
                                                 const r = await fetch(`/api/quotes/${q.id}/bends`, { credentials: 'include' });
                                                 if (!r.ok) throw new Error();
@@ -747,8 +844,8 @@ ${settings.reportFooterText ? `<div class="report-footer">${settings.reportFoote
                                             className="text-xs text-indigo-400 hover:text-indigo-300 font-bold px-2 py-1 border border-indigo-400/30 rounded-lg cursor-pointer">
                                             📄 PDF
                                         </button>
-                                        {q.status === 'pending' && (
-                                            <button onClick={() => { setSavedQuote(q); setStep('payment'); }}
+                                        {q.status === 'draft' && (
+                                            <button onClick={(e) => { e.stopPropagation(); setSavedQuote(q); setStep('payment'); }}
                                                 className="text-xs text-green-400 hover:text-green-300 font-bold px-2 py-1 border border-green-400/30 rounded-lg cursor-pointer">
                                                 💳 Pagar
                                             </button>
@@ -824,7 +921,10 @@ ${settings.reportFooterText ? `<div class="report-footer">${settings.reportFoote
                             </AnimatePresence>
 
                             {/* Canvas */}
-                            <BendCanvas risks={currentRisks} svgRef={svgRef} />
+                            <BendCanvas
+                                risks={currentRisks}
+                                svgRef={svgRef}
+                            />
 
                             {/* Width info */}
                             <div className="flex gap-3 flex-wrap text-sm">
@@ -837,6 +937,46 @@ ${settings.reportFooterText ? `<div class="report-footer">${settings.reportFoote
                                     </div>
                                 )}
                                 {isOver && <div className="flex items-center gap-2 text-red-400 font-bold"><AlertTriangle className="w-4 h-4" /> Excede 120 cm!</div>}
+                            </div>
+
+                            {/* Caída Lateral Toggle */}
+                            <div className="bg-white/5 border border-white/10 rounded-2xl p-4 space-y-3">
+                                <div className="flex items-center justify-between">
+                                    <div className="flex items-center gap-2">
+                                        <div className={`w-10 h-6 rounded-full p-1 cursor-pointer transition-colors ${isLateralSlope ? 'bg-amber-500' : 'bg-slate-700'}`}
+                                            onClick={() => {
+                                                if (isLateralSlope) { setSlopeH1(''); setSlopeH2(''); }
+                                                setIsLateralSlope(!isLateralSlope);
+                                            }}>
+                                            <div className={`w-4 h-4 bg-white rounded-full transition-transform ${isLateralSlope ? 'translate-x-4' : 'translate-x-0'}`} />
+                                        </div>
+                                        <span className="text-sm font-bold text-white uppercase tracking-wider">Caída Lateral</span>
+                                    </div>
+                                    {isLateralSlope && (
+                                        <div className="flex bg-slate-800 rounded-lg overflow-hidden border border-white/10">
+                                            {(['D', 'E'] as const).map(s => (
+                                                <button key={s} onClick={() => setSlopeSide(s)}
+                                                    className={`px-3 py-1 text-xs font-black transition-all cursor-pointer ${slopeSide === s ? 'bg-amber-500 text-white' : 'text-white/40 hover:text-white'}`}>
+                                                    {s === 'D' ? 'Direita' : 'Esquerda'}
+                                                </button>
+                                            ))}
+                                        </div>
+                                    )}
+                                </div>
+                                {isLateralSlope && (
+                                    <div className="grid grid-cols-2 gap-3 animate-in fade-in slide-in-from-top-2 duration-300">
+                                        <div>
+                                            <label className="text-[10px] font-bold text-slate-400 uppercase ml-1">Altura 1 (cm)</label>
+                                            <input type="number" step="0.1" placeholder="H1" value={slopeH1} onChange={e => setSlopeH1(e.target.value)}
+                                                className="w-full bg-white/10 border border-white/20 rounded-xl px-4 py-2 text-white font-bold focus:outline-none focus:border-amber-400" />
+                                        </div>
+                                        <div>
+                                            <label className="text-[10px] font-bold text-slate-400 uppercase ml-1">Altura 2 (cm)</label>
+                                            <input type="number" step="0.1" placeholder="H2" value={slopeH2} onChange={e => setSlopeH2(e.target.value)}
+                                                className="w-full bg-white/10 border border-white/20 rounded-xl px-4 py-2 text-white font-bold focus:outline-none focus:border-amber-400" />
+                                        </div>
+                                    </div>
+                                )}
                             </div>
 
                             {/* Direction grid (compass 3×3 with center placeholder) */}
@@ -855,12 +995,12 @@ ${settings.reportFooterText ? `<div class="report-footer">${settings.reportFoote
                             <div>
                                 <p className="text-sm font-bold text-slate-300 mb-3 uppercase tracking-wider">Passo 2 — Tamanho (cm)</p>
                                 <div className="flex gap-3">
-                                    <input ref={sizeInputRef} type="number" min="1" max="120" step="0.5" placeholder="Ex: 15"
-                                        value={pendingSize} onChange={e => { setPendingSize(e.target.value); setSizeError(''); }}
+                                    <input ref={sizeInputRef} type="number" min="1" max="120" step="0.5" placeholder={isLateralSlope ? "Calculado pela caída" : "Ex: 15"}
+                                        value={isLateralSlope ? "" : pendingSize} onChange={e => { setPendingSize(e.target.value); setSizeError(''); }}
                                         onKeyDown={e => e.key === 'Enter' && handleAddRisk()}
-                                        disabled={!pendingDir}
+                                        disabled={!pendingDir || isLateralSlope}
                                         className="flex-1 bg-white/10 border border-white/20 rounded-2xl px-5 py-3 text-white placeholder-white/30 font-bold text-lg focus:outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-400/20 disabled:opacity-40 transition-all" />
-                                    <button onClick={handleAddRisk} disabled={!pendingDir || !pendingSize}
+                                    <button onClick={handleAddRisk} disabled={!pendingDir || (!pendingSize && !isLateralSlope)}
                                         className="px-6 py-3 bg-blue-500 hover:bg-blue-400 disabled:opacity-40 text-white font-bold rounded-2xl transition-all flex items-center gap-2 cursor-pointer disabled:cursor-not-allowed">
                                         <Plus className="w-5 h-5" /> Adicionar
                                     </button>
@@ -994,9 +1134,20 @@ ${settings.reportFooterText ? `<div class="report-footer">${settings.reportFoote
                                                 {bend.lengths.map((l, li) => (
                                                     <div key={li} className="flex gap-2 items-center">
                                                         <span className="text-slate-500 text-xs w-4">{li + 1}.</span>
-                                                        <input type="number" min="0.01" step="0.01" placeholder="Ex: 3.50" value={l}
-                                                            onChange={e => updateLength(bend.id, li, e.target.value)}
-                                                            className="flex-1 bg-white/10 border border-white/20 rounded-xl px-4 py-2 text-white placeholder-white/30 font-bold focus:outline-none focus:border-blue-400 transition-all" />
+                                                        <div className="flex-1 relative">
+                                                            <input type="number" min="0.01" step="0.01" placeholder="Ex: 3.50" value={l}
+                                                                onChange={e => updateLength(bend.id, li, e.target.value)}
+                                                                className="w-full bg-white/10 border border-white/20 rounded-xl px-4 py-2 text-white placeholder-white/30 font-bold focus:outline-none focus:border-blue-400 transition-all pr-12" />
+                                                            {/* Production Order Indicator */}
+                                                            {optimization.length > 0 && (() => {
+                                                                const binIdx = optimization.findIndex(bin => bin.some((p: any) => p.bendId === bend.id && p.originalIdx === li));
+                                                                return binIdx !== -1 ? (
+                                                                    <span className="absolute right-3 top-1/2 -translate-y-1/2 text-[10px] font-black text-blue-400 bg-blue-500/10 px-1.5 py-0.5 rounded border border-blue-500/20" title="Ordem de Produção (Lote)">
+                                                                        ({binIdx + 1})
+                                                                    </span>
+                                                                ) : null;
+                                                            })()}
+                                                        </div>
                                                         <span className="text-slate-400 text-sm">m</span>
                                                         {bend.lengths.length > 1 && (
                                                             <button onClick={() => { const ls = bend.lengths.filter((_, i) => i !== li); setBends(prev => prev.map(b => b.id === bend.id ? { ...b, lengths: ls, ...calcM2(b.roundedWidthCm, ls) } : b)); }}
@@ -1040,173 +1191,178 @@ ${settings.reportFooterText ? `<div class="report-footer">${settings.reportFoote
                             </div>
                         )}
                     </div>
-                )}
+                )
+                }
 
                 {/* ══ STEP 2: SUMMARY ══ */}
-                {step === 'summary' && (
-                    <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="space-y-6">
-                        <div className="bg-white/5 border border-white/10 rounded-3xl p-8 space-y-6" id="quote-print">
-                            <div className="flex items-start justify-between flex-wrap gap-4">
-                                <div>
-                                    <h2 className="text-2xl font-black text-white">Resumo do Orçamento</h2>
-                                    <p className="text-slate-400 text-sm mt-1">{new Date().toLocaleDateString('pt-BR', { day: '2-digit', month: 'long', year: 'numeric' })}</p>
-                                    <p className="text-slate-300 text-sm mt-1">Cliente: <strong>{user?.name || user?.username}</strong></p>
-                                </div>
-                                {/* Payment status badge */}
-                                <div className="flex items-center gap-2 bg-yellow-500/10 border border-yellow-500/30 rounded-2xl px-4 py-2">
-                                    <span className="text-yellow-300 font-black text-sm">⏳ AGUARDANDO PAGAMENTO</span>
-                                </div>
-                            </div>
-
-                            {bends.map((b, i) => (
-                                <div key={b.id} className="border border-white/10 rounded-2xl p-5 space-y-3">
-                                    <div className="flex items-center gap-3">
-                                        <span className="w-8 h-8 bg-blue-500 rounded-full flex items-center justify-center text-white font-black text-sm">{i + 1}</span>
-                                        <div>
-                                            <p className="text-white font-bold">Dobra {i + 1}</p>
-                                            <p className="text-slate-400 text-xs">{b.risks.map(r => `${DIRECTION_ICONS[r.direction]} ${r.sizeCm}cm`).join(' · ')}</p>
-                                        </div>
-                                        <div className="ml-auto text-right">
-                                            <p className="text-white font-bold">{(b.roundedWidthCm / 100).toFixed(2)}m × {b.totalLengthM.toFixed(2)}m</p>
-                                            <p className="text-blue-400 font-black">{b.m2.toFixed(4)} m²</p>
-                                            <p className="text-green-400 font-bold text-sm">R$ {(b.m2 * pricePerM2).toFixed(2)}</p>
-                                        </div>
+                {
+                    step === 'summary' && (
+                        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="space-y-6">
+                            <div className="bg-white/5 border border-white/10 rounded-3xl p-8 space-y-6" id="quote-print">
+                                <div className="flex items-start justify-between flex-wrap gap-4">
+                                    <div>
+                                        <h2 className="text-2xl font-black text-white">Resumo do Orçamento</h2>
+                                        <p className="text-slate-400 text-sm mt-1">{new Date().toLocaleDateString('pt-BR', { day: '2-digit', month: 'long', year: 'numeric' })}</p>
+                                        <p className="text-slate-300 text-sm mt-1">Cliente: <strong>{user?.name || user?.username}</strong></p>
                                     </div>
-                                    {b.svgDataUrl && (
-                                        <div className="relative group cursor-pointer" onClick={() => setZoomImg(b.svgDataUrl!)}>
-                                            <img src={b.svgDataUrl} alt={`Dobra ${i + 1}`} className="w-full rounded-xl group-hover:opacity-90" style={{ maxHeight: 180, objectFit: 'contain', background: '#1e293b' }} />
-                                            <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"><ZoomIn className="w-8 h-8 text-white" /></div>
-                                        </div>
-                                    )}
+                                    {/* Payment status badge */}
+                                    <div className="flex items-center gap-2 bg-yellow-500/10 border border-yellow-500/30 rounded-2xl px-4 py-2">
+                                        <span className="text-yellow-300 font-black text-sm">⏳ AGUARDANDO PAGAMENTO</span>
+                                    </div>
                                 </div>
-                            ))}
 
-                            <div className="border-t border-white/10 pt-4 space-y-2 text-sm">
-                                <div className="flex justify-between text-slate-300"><span>Total m²:</span><strong className="text-white">{totalM2.toFixed(4)} m²</strong></div>
-                                <div className="flex justify-between text-slate-300"><span>Preço por m²:</span><span>R$ {pricePerM2.toFixed(2)}</span></div>
-                                <div className="flex justify-between text-lg font-black"><span className="text-white">TOTAL A PAGAR:</span><span className="text-green-400">R$ {totalValue.toFixed(2)}</span></div>
+                                {bends.map((b, i) => (
+                                    <div key={b.id} className="border border-white/10 rounded-2xl p-5 space-y-3">
+                                        <div className="flex items-center gap-3">
+                                            <span className="w-8 h-8 bg-blue-500 rounded-full flex items-center justify-center text-white font-black text-sm">{i + 1}</span>
+                                            <div>
+                                                <p className="text-white font-bold">Dobra {i + 1}</p>
+                                                <p className="text-slate-400 text-xs">{b.risks.map(r => `${DIRECTION_ICONS[r.direction]} ${r.sizeCm}cm`).join(' · ')}</p>
+                                            </div>
+                                            <div className="ml-auto text-right">
+                                                <p className="text-white font-bold">{(b.roundedWidthCm / 100).toFixed(2)}m × {b.totalLengthM.toFixed(2)}m</p>
+                                                <p className="text-blue-400 font-black">{b.m2.toFixed(4)} m²</p>
+                                                <p className="text-green-400 font-bold text-sm">R$ {(b.m2 * pricePerM2).toFixed(2)}</p>
+                                            </div>
+                                        </div>
+                                        {b.svgDataUrl && (
+                                            <div className="relative group cursor-pointer" onClick={() => setZoomImg(b.svgDataUrl!)}>
+                                                <img src={b.svgDataUrl} alt={`Dobra ${i + 1}`} className="w-full rounded-xl group-hover:opacity-90" style={{ maxHeight: 180, objectFit: 'contain', background: '#1e293b' }} />
+                                                <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"><ZoomIn className="w-8 h-8 text-white" /></div>
+                                            </div>
+                                        )}
+                                    </div>
+                                ))}
+
+                                <div className="border-t border-white/10 pt-4 space-y-2 text-sm">
+                                    <div className="flex justify-between text-slate-300"><span>Total m²:</span><strong className="text-white">{totalM2.toFixed(4)} m²</strong></div>
+                                    <div className="flex justify-between text-slate-300"><span>Preço por m²:</span><span>R$ {pricePerM2.toFixed(2)}</span></div>
+                                    <div className="flex justify-between text-lg font-black"><span className="text-white">TOTAL A PAGAR:</span><span className="text-green-400">R$ {totalValue.toFixed(2)}</span></div>
+                                </div>
+
+                                <div>
+                                    <label className="block text-sm font-bold text-slate-300 mb-2">Observações (opcional)</label>
+                                    <textarea rows={3} value={notes} onChange={e => setNotes(e.target.value)} placeholder="Ex: endereço da obra, referência do local, cor, material, urgência..."
+                                        className="w-full bg-white/10 border border-white/20 rounded-2xl px-5 py-3 text-white placeholder-white/30 focus:outline-none focus:border-blue-400 transition-all" />
+                                </div>
                             </div>
 
-                            <div>
-                                <label className="block text-sm font-bold text-slate-300 mb-2">Observações (opcional)</label>
-                                <textarea rows={3} value={notes} onChange={e => setNotes(e.target.value)} placeholder="Ex: endereço da obra, referência do local, cor, material, urgência..."
-                                    className="w-full bg-white/10 border border-white/20 rounded-2xl px-5 py-3 text-white placeholder-white/30 focus:outline-none focus:border-blue-400 transition-all" />
+                            <div className="flex flex-wrap gap-3 justify-between">
+                                <div className="flex gap-3 flex-wrap">
+                                    <button onClick={() => setStep('bends')} className="px-5 py-3 bg-white/10 hover:bg-white/20 text-white rounded-2xl flex items-center gap-2 font-bold cursor-pointer"><ChevronLeft className="w-4 h-4" /> Voltar</button>
+                                    <button onClick={handleDownloadPDF} className="px-5 py-3 bg-white/10 hover:bg-white/20 text-white rounded-2xl flex items-center gap-2 font-bold cursor-pointer"><Printer className="w-4 h-4" /> Imprimir</button>
+                                    <button onClick={handleDownloadPDF} className="px-5 py-3 bg-indigo-500 hover:bg-indigo-400 text-white rounded-2xl flex items-center gap-2 font-bold cursor-pointer"><FileDown className="w-4 h-4" /> Baixar PDF</button>
+                                </div>
+                                <button onClick={handleSubmit} disabled={submitting}
+                                    className="px-8 py-3 bg-green-500 hover:bg-green-400 disabled:opacity-50 text-white font-black rounded-2xl flex items-center gap-2 cursor-pointer text-lg">
+                                    {submitting ? <><RefreshCw className="w-5 h-5 animate-spin" /> Enviando...</> : <><Send className="w-5 h-5" /> Enviar Orçamento</>}
+                                </button>
                             </div>
-                        </div>
-
-                        <div className="flex flex-wrap gap-3 justify-between">
-                            <div className="flex gap-3 flex-wrap">
-                                <button onClick={() => setStep('bends')} className="px-5 py-3 bg-white/10 hover:bg-white/20 text-white rounded-2xl flex items-center gap-2 font-bold cursor-pointer"><ChevronLeft className="w-4 h-4" /> Voltar</button>
-                                <button onClick={handleDownloadPDF} className="px-5 py-3 bg-white/10 hover:bg-white/20 text-white rounded-2xl flex items-center gap-2 font-bold cursor-pointer"><Printer className="w-4 h-4" /> Imprimir</button>
-                                <button onClick={handleDownloadPDF} className="px-5 py-3 bg-indigo-500 hover:bg-indigo-400 text-white rounded-2xl flex items-center gap-2 font-bold cursor-pointer"><FileDown className="w-4 h-4" /> Baixar PDF</button>
-                            </div>
-                            <button onClick={handleSubmit} disabled={submitting}
-                                className="px-8 py-3 bg-green-500 hover:bg-green-400 disabled:opacity-50 text-white font-black rounded-2xl flex items-center gap-2 cursor-pointer text-lg">
-                                {submitting ? <><RefreshCw className="w-5 h-5 animate-spin" /> Enviando...</> : <><Send className="w-5 h-5" /> Enviar Orçamento</>}
-                            </button>
-                        </div>
-                    </motion.div>
-                )}
+                        </motion.div>
+                    )
+                }
 
                 {/* ══ STEP 3: PAYMENT ══ */}
-                {step === 'payment' && savedQuote && (
-                    <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="space-y-6">
-                        <div className="text-center bg-green-500/10 border border-green-500/30 rounded-3xl p-8">
-                            <div className="w-16 h-16 bg-green-500 rounded-full flex items-center justify-center mx-auto mb-4 text-3xl">✓</div>
-                            <h2 className="text-2xl font-black text-white mb-2">Orçamento #{savedQuote.id.substring(0, 8)} criado!</h2>
-                            <p className="text-slate-300">Nossa equipe foi notificada. Realize o pagamento via PIX.</p>
-                        </div>
-                        <div className="bg-white/5 border border-white/10 rounded-3xl p-8 space-y-6">
-                            <h3 className="text-xl font-bold text-white">💳 Pagamento via PIX</h3>
-                            <div className="bg-white/5 rounded-2xl p-5">
-                                <p className="text-slate-400 text-xs uppercase tracking-wider mb-1">Valor a Pagar</p>
-                                <p className="text-4xl font-black text-green-400">R$ {parseFloat(savedQuote.finalValue || savedQuote.totalValue || 0).toFixed(2)}</p>
+                {
+                    step === 'payment' && savedQuote && (
+                        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="space-y-6">
+                            <div className="text-center bg-green-500/10 border border-green-500/30 rounded-3xl p-8">
+                                <div className="w-16 h-16 bg-green-500 rounded-full flex items-center justify-center mx-auto mb-4 text-3xl">✓</div>
+                                <h2 className="text-2xl font-black text-white mb-2">Orçamento #{savedQuote.id.substring(0, 8)} criado!</h2>
+                                <p className="text-slate-300">Nossa equipe foi notificada. Realize o pagamento via PIX.</p>
                             </div>
-                            {pixKeys.length > 0 ? (
-                                <div className="space-y-4">
-                                    {pixKeys.map(pk => (
-                                        <div key={pk.id} className="bg-white/5 border border-white/10 rounded-2xl p-5 space-y-3">
-                                            <p className="text-white font-bold text-lg">{pk.bank || 'Banco'}</p>
-                                            <p className="text-slate-300 text-sm">Beneficiário: <strong className="text-white">{pk.beneficiary || pk.label || 'N/A'}</strong></p>
-                                            <div className="flex items-center gap-3">
-                                                <code className="text-white font-bold flex-1 break-all text-sm bg-white/10 p-2 rounded-lg">{pk.pixKey}</code>
-                                                <button onClick={() => navigator.clipboard.writeText(pk.pixKey).then(() => setToast({ msg: 'Chave PIX copiada!', type: 'success' }))}
-                                                    className="px-4 py-2 bg-blue-500 hover:bg-blue-400 text-white rounded-xl cursor-pointer flex items-center gap-2 text-sm font-bold">
-                                                    <Copy className="w-4 h-4" /> Copiar
-                                                </button>
-                                            </div>
-                                            {pk.pixCode && (
+                            <div className="bg-white/5 border border-white/10 rounded-3xl p-8 space-y-6">
+                                <h3 className="text-xl font-bold text-white">💳 Pagamento via PIX</h3>
+                                <div className="bg-white/5 rounded-2xl p-5">
+                                    <p className="text-slate-400 text-xs uppercase tracking-wider mb-1">Valor a Pagar</p>
+                                    <p className="text-4xl font-black text-green-400">R$ {parseFloat(savedQuote.finalValue || savedQuote.totalValue || 0).toFixed(2)}</p>
+                                </div>
+                                {pixKeys.length > 0 ? (
+                                    <div className="space-y-4">
+                                        {pixKeys.map(pk => (
+                                            <div key={pk.id} className="bg-white/5 border border-white/10 rounded-2xl p-5 space-y-3">
+                                                <p className="text-white font-bold text-lg">{pk.bank || 'Banco'}</p>
+                                                <p className="text-slate-300 text-sm">Beneficiário: <strong className="text-white">{pk.beneficiary || pk.label || 'N/A'}</strong></p>
                                                 <div className="flex items-center gap-3">
-                                                    <code className="text-white/60 text-xs flex-1 break-all bg-white/5 p-2 rounded-lg">{pk.pixCode.substring(0, 60)}...</code>
-                                                    <button onClick={() => navigator.clipboard.writeText(pk.pixCode).then(() => setToast({ msg: 'Código copia-cola copiado!', type: 'success' }))}
-                                                        className="px-3 py-1.5 bg-white/10 hover:bg-white/20 text-white rounded-lg text-xs font-bold cursor-pointer flex items-center gap-1">
-                                                        <Copy className="w-3 h-3" /> Código
+                                                    <code className="text-white font-bold flex-1 break-all text-sm bg-white/10 p-2 rounded-lg">{pk.pixKey}</code>
+                                                    <button onClick={() => navigator.clipboard.writeText(pk.pixKey).then(() => setToast({ msg: 'Chave PIX copiada!', type: 'success' }))}
+                                                        className="px-4 py-2 bg-blue-500 hover:bg-blue-400 text-white rounded-xl cursor-pointer flex items-center gap-2 text-sm font-bold">
+                                                        <Copy className="w-4 h-4" /> Copiar
                                                     </button>
                                                 </div>
-                                            )}
-                                            {pk.qrCodeUrl && (
-                                                <div className="flex justify-center">
-                                                    <div className="bg-white p-3 rounded-xl">
-                                                        <img src={pk.qrCodeUrl} alt="QR Code" className="w-36 h-36 object-contain" />
-                                                        <p className="text-center text-slate-700 text-xs mt-1 font-bold">Escaneie para pagar</p>
+                                                {pk.pixCode && (
+                                                    <div className="flex items-center gap-3">
+                                                        <code className="text-white/60 text-xs flex-1 break-all bg-white/5 p-2 rounded-lg">{pk.pixCode.substring(0, 60)}...</code>
+                                                        <button onClick={() => navigator.clipboard.writeText(pk.pixCode).then(() => setToast({ msg: 'Código copia-cola copiado!', type: 'success' }))}
+                                                            className="px-3 py-1.5 bg-white/10 hover:bg-white/20 text-white rounded-lg text-xs font-bold cursor-pointer flex items-center gap-1">
+                                                            <Copy className="w-3 h-3" /> Código
+                                                        </button>
                                                     </div>
-                                                </div>
-                                            )}
+                                                )}
+                                                {pk.qrCodeUrl && (
+                                                    <div className="flex justify-center">
+                                                        <div className="bg-white p-3 rounded-xl">
+                                                            <img src={pk.qrCodeUrl} alt="QR Code" className="w-36 h-36 object-contain" />
+                                                            <p className="text-center text-slate-700 text-xs mt-1 font-bold">Escaneie para pagar</p>
+                                                        </div>
+                                                    </div>
+                                                )}
+                                            </div>
+                                        ))}
+                                    </div>
+                                ) : settings.pixKey ? (
+                                    <div className="bg-white/5 rounded-2xl p-5">
+                                        <p className="text-slate-400 text-xs uppercase tracking-wider mb-2">Chave PIX</p>
+                                        <div className="flex items-center gap-3">
+                                            <code className="text-white font-bold flex-1 break-all text-sm">{settings.pixKey}</code>
+                                            <button onClick={() => navigator.clipboard.writeText(settings.pixKey).then(() => setToast({ msg: 'Chave PIX copiada!', type: 'success' }))}
+                                                className="px-4 py-2 bg-blue-500 hover:bg-blue-400 text-white rounded-xl cursor-pointer flex items-center gap-2 text-sm font-bold">
+                                                <Copy className="w-4 h-4" /> Copiar
+                                            </button>
                                         </div>
-                                    ))}
-                                </div>
-                            ) : settings.pixKey ? (
-                                <div className="bg-white/5 rounded-2xl p-5">
-                                    <p className="text-slate-400 text-xs uppercase tracking-wider mb-2">Chave PIX</p>
-                                    <div className="flex items-center gap-3">
-                                        <code className="text-white font-bold flex-1 break-all text-sm">{settings.pixKey}</code>
-                                        <button onClick={() => navigator.clipboard.writeText(settings.pixKey).then(() => setToast({ msg: 'Chave PIX copiada!', type: 'success' }))}
-                                            className="px-4 py-2 bg-blue-500 hover:bg-blue-400 text-white rounded-xl cursor-pointer flex items-center gap-2 text-sm font-bold">
-                                            <Copy className="w-4 h-4" /> Copiar
+                                    </div>
+                                ) : (
+                                    <div className="bg-yellow-500/10 border border-yellow-500/30 rounded-2xl p-4 text-yellow-300 text-sm">⚠ Chave PIX não configurada. Entre em contato via WhatsApp.</div>
+                                )}
+                                <div className="border-t border-white/10 pt-6">
+                                    <h4 className="font-bold text-white mb-3">📎 Enviar Comprovante</h4>
+                                    <div className="flex gap-3 flex-wrap">
+                                        <input type="file" accept="image/*,application/pdf" onChange={e => setProofFile(e.target.files?.[0] || null)}
+                                            className="flex-1 bg-white/10 border border-white/20 rounded-2xl px-4 py-3 text-white text-sm file:mr-3 file:py-1.5 file:px-4 file:rounded-full file:border-0 file:text-xs file:font-bold file:bg-white/20 file:text-white cursor-pointer" />
+                                        <button onClick={handleUploadProof} disabled={!proofFile || uploadingProof}
+                                            className="px-6 py-3 bg-blue-500 hover:bg-blue-400 disabled:opacity-50 text-white font-bold rounded-2xl flex items-center gap-2 cursor-pointer">
+                                            {uploadingProof ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />} Enviar
                                         </button>
                                     </div>
                                 </div>
-                            ) : (
-                                <div className="bg-yellow-500/10 border border-yellow-500/30 rounded-2xl p-4 text-yellow-300 text-sm">⚠ Chave PIX não configurada. Entre em contato via WhatsApp.</div>
-                            )}
-                            <div className="border-t border-white/10 pt-6">
-                                <h4 className="font-bold text-white mb-3">📎 Enviar Comprovante</h4>
+                                {settings.whatsapp && (
+                                    <a href={`https://wa.me/${settings.whatsapp}?text=${encodeURIComponent(`Realizei o pagamento do orçamento #${savedQuote.id}.`)}`}
+                                        target="_blank" rel="noopener noreferrer"
+                                        className="flex items-center justify-center gap-3 w-full p-4 bg-green-600 hover:bg-green-500 text-white font-bold rounded-2xl transition-all">
+                                        📱 Confirmar pagamento pelo WhatsApp
+                                    </a>
+                                )}
+                            </div>
+                            <div className="flex flex-wrap gap-3 justify-between">
                                 <div className="flex gap-3 flex-wrap">
-                                    <input type="file" accept="image/*,application/pdf" onChange={e => setProofFile(e.target.files?.[0] || null)}
-                                        className="flex-1 bg-white/10 border border-white/20 rounded-2xl px-4 py-3 text-white text-sm file:mr-3 file:py-1.5 file:px-4 file:rounded-full file:border-0 file:text-xs file:font-bold file:bg-white/20 file:text-white cursor-pointer" />
-                                    <button onClick={handleUploadProof} disabled={!proofFile || uploadingProof}
-                                        className="px-6 py-3 bg-blue-500 hover:bg-blue-400 disabled:opacity-50 text-white font-bold rounded-2xl flex items-center gap-2 cursor-pointer">
-                                        {uploadingProof ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />} Enviar
+                                    <button onClick={handleDownloadPDF} className="px-5 py-3 bg-white/10 hover:bg-white/20 text-white rounded-2xl flex items-center gap-2 font-bold cursor-pointer"><Printer className="w-4 h-4" /> Imprimir</button>
+                                    <button onClick={handleDownloadPDF} className="px-5 py-3 bg-indigo-500 hover:bg-indigo-400 text-white rounded-2xl flex items-center gap-2 font-bold cursor-pointer"><FileDown className="w-4 h-4" /> Baixar PDF</button>
+                                    <button onClick={() => { setBends([]); setStep('bends'); setSavedQuote(null); setNotes(''); setClientName(''); setShowPostConfirm(false); setShowMyQuotes(true); fetch('/api/quotes', { credentials: 'include' }).then(r => r.json()).then(setMyQuotes).catch(() => { }); }}
+                                        className="px-5 py-3 bg-blue-500 hover:bg-blue-400 text-white rounded-2xl flex items-center gap-2 font-bold cursor-pointer">
+                                        <List className="w-4 h-4" /> Ir para Listagem
                                     </button>
                                 </div>
-                            </div>
-                            {settings.whatsapp && (
-                                <a href={`https://wa.me/${settings.whatsapp}?text=${encodeURIComponent(`Realizei o pagamento do orçamento #${savedQuote.id}.`)}`}
-                                    target="_blank" rel="noopener noreferrer"
-                                    className="flex items-center justify-center gap-3 w-full p-4 bg-green-600 hover:bg-green-500 text-white font-bold rounded-2xl transition-all">
-                                    📱 Confirmar pagamento pelo WhatsApp
-                                </a>
-                            )}
-                        </div>
-                        <div className="flex flex-wrap gap-3 justify-between">
-                            <div className="flex gap-3 flex-wrap">
-                                <button onClick={handleDownloadPDF} className="px-5 py-3 bg-white/10 hover:bg-white/20 text-white rounded-2xl flex items-center gap-2 font-bold cursor-pointer"><Printer className="w-4 h-4" /> Imprimir</button>
-                                <button onClick={handleDownloadPDF} className="px-5 py-3 bg-indigo-500 hover:bg-indigo-400 text-white rounded-2xl flex items-center gap-2 font-bold cursor-pointer"><FileDown className="w-4 h-4" /> Baixar PDF</button>
-                                <button onClick={() => { setBends([]); setStep('bends'); setSavedQuote(null); setNotes(''); setClientName(''); setShowPostConfirm(false); setShowMyQuotes(true); fetch('/api/quotes', { credentials: 'include' }).then(r => r.json()).then(setMyQuotes).catch(() => { }); }}
-                                    className="px-5 py-3 bg-blue-500 hover:bg-blue-400 text-white rounded-2xl flex items-center gap-2 font-bold cursor-pointer">
-                                    <List className="w-4 h-4" /> Ir para Listagem
+                                <button onClick={() => { setBends([]); setStep('bends'); setSavedQuote(null); setNotes(''); setClientName(''); setShowPostConfirm(false); }}
+                                    className="px-5 py-3 bg-white/10 hover:bg-white/20 text-white rounded-2xl flex items-center gap-2 font-bold cursor-pointer">
+                                    <Plus className="w-4 h-4" /> Novo Orçamento
                                 </button>
                             </div>
-                            <button onClick={() => { setBends([]); setStep('bends'); setSavedQuote(null); setNotes(''); setClientName(''); setShowPostConfirm(false); }}
-                                className="px-5 py-3 bg-white/10 hover:bg-white/20 text-white rounded-2xl flex items-center gap-2 font-bold cursor-pointer">
-                                <Plus className="w-4 h-4" /> Novo Orçamento
-                            </button>
-                        </div>
-                    </motion.div>
-                )}
-            </div>
+                        </motion.div>
+                    )
+                }
+            </div >
 
 
-        </div>
+        </div >
     );
 }

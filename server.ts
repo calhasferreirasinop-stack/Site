@@ -215,17 +215,46 @@ app.post('/api/login', async (req, res) => {
   }
 
   const { username, password } = req.body;
+  if (!username || !password) return res.status(400).json({ error: 'Usuário e senha obrigatórios' });
+
   console.log(`[AUTH_LOGIN_ATTEMPT] User: ${username} | IP: ${req.ip}`);
-  // Para manter compatibilidade com o frontend atual, buscamos o profile
-  const { data: profile } = await supabase
-    .from('profiles')
-    .select('id, role, name, company_id')
-    .eq('name', username) // Nome usado como login temporário
-    .single();
 
-  if (profile) {
+  // Use a simulated email for Supabase Auth if it's a simple username
+  const email = username.includes('@') ? username : `${username}@ferreiracalhas.com`;
 
-    // Simulamos a sessão com o ID do perfil (auth.uid)
+  try {
+    const { data: authData, error: authError } = await supabase.auth.signInWithPassword({
+      email,
+      password
+    });
+
+    if (authError) {
+      // Secure Fallback for users not yet in Supabase Auth but in profiles table
+      const { data: profile } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('username', username)
+        .single();
+
+      if (profile && profile.password && bcrypt.compareSync(password, profile.password)) {
+        const sessionData = Buffer.from(JSON.stringify({ userId: profile.id })).toString('base64');
+        res.cookie('session', sessionData, { httpOnly: true, secure: process.env.NODE_ENV === 'production', maxAge: 30 * 24 * 60 * 60 * 1000 });
+        return res.json({ success: true, role: profile.role, name: profile.name, companyId: profile.company_id, id: profile.id });
+      }
+
+      console.warn(`[AUTH_FAILED] User: ${username} | Reason: ${authError.message}`);
+      return res.status(401).json({ error: 'Usuário ou senha inválidos' });
+    }
+
+    const userId = authData.user.id;
+    const { data: profile } = await supabase
+      .from('profiles')
+      .select('id, role, name, company_id')
+      .eq('id', userId)
+      .single();
+
+    if (!profile) return res.status(401).json({ error: 'Perfil não encontrado no sistema' });
+
     const sessionData = Buffer.from(JSON.stringify({ userId: profile.id })).toString('base64');
     res.cookie('session', sessionData, {
       httpOnly: true,
@@ -233,9 +262,11 @@ app.post('/api/login', async (req, res) => {
       sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
       maxAge: 30 * 24 * 60 * 60 * 1000
     });
-    res.json({ success: true, role: profile.role, name: profile.name, companyId: profile.company_id });
-  } else {
-    res.status(401).json({ error: 'Usuário não encontrado' });
+    res.json({ success: true, role: profile.role, name: profile.name, companyId: profile.company_id, id: profile.id });
+
+  } catch (err) {
+    console.error('[AUTH_EXCEPTION]', err);
+    res.status(500).json({ error: 'Erro interno ao realizar login' });
   }
 });
 
@@ -277,6 +308,52 @@ app.post('/api/auth/change-password', authenticate, async (req: any, res) => {
   res.json({ success: true });
 });
 
+
+// =====================
+// USERS Routes (Multi-tenant)
+// =====================
+app.get('/api/users', requireAdmin, async (req: any, res) => {
+  const { data, error } = await supabase.from('profiles').select('id,username,name,email,phone,role,active,created_at')
+    .eq('company_id', req.user.companyId)
+    .order('created_at', { ascending: false });
+  if (error) return res.status(500).json({ error: error.message });
+  res.json(data || []);
+});
+
+app.post('/api/users', requireAdmin, async (req: any, res) => {
+  const { username, password, name, email, phone, role } = req.body;
+  if (!username || !password) return res.status(400).json({ error: 'Username e senha obrigatórios' });
+  if ((role === 'admin' || role === 'master') && req.user.role !== 'master')
+    return res.status(403).json({ error: 'Apenas master pode criar admins' });
+
+  const { data, error } = await supabase.from('profiles').insert({
+    username,
+    password: bcrypt.hashSync(password, 10),
+    name, email, phone, role: role || 'user', active: true, company_id: req.user.companyId
+  }).select('id,username,name,email,phone,role,active').single();
+
+  if (error) return res.status(500).json({ error: error.message });
+  res.json(data);
+});
+
+app.put('/api/users/:id', requireAdmin, async (req: any, res) => {
+  const id = req.params.id;
+  const { name, email, phone, active, role, password } = req.body;
+  const updateData: any = { name, email, phone, active };
+  if (role !== undefined && req.user.role === 'master') updateData.role = role;
+  if (password) updateData.password = bcrypt.hashSync(password, 10);
+  const { data, error } = await supabase.from('profiles').update(updateData)
+    .eq('id', id).eq('company_id', req.user.companyId).select('id,username,name,email,phone,role,active').single();
+  if (error) return res.status(500).json({ error: error.message });
+  res.json(data);
+});
+
+app.delete('/api/users/:id', requireAdmin, async (req: any, res) => {
+  const id = req.params.id;
+  if (id === req.user.id) return res.status(400).json({ error: 'Não pode excluir a si mesmo' });
+  await supabase.from('profiles').delete().eq('id', id).eq('company_id', req.user.companyId);
+  res.json({ success: true });
+});
 
 // =====================
 // CLIENTS Routes (SaaS V2 Map: /api/clients -> clients table)
@@ -377,29 +454,25 @@ app.get('/api/users', requireAdmin, async (req: any, res) => {
 });
 
 app.post('/api/users', requireAdmin, async (req: any, res) => {
-  if (!checkRateLimit(req.ip, 20)) return res.status(429).json({ error: 'Rate limit exceeded' });
+  if (!checkRateLimit(req.ip, 10)) return res.status(429).json({ error: 'Muitas tentativas. Tente novamente em 1 minuto.' });
 
-  const { email, password, name, role, phone } = req.body;
+  const { username, password, name, role, phone } = req.body;
+  const email = username?.includes('@') ? username : `${username}@ferreiracalhas.com`;
 
   // Security: Only master can assign master role
   if (role === 'master' && req.user.role !== 'master') {
     return res.status(403).json({ error: 'Apenas master pode criar outros masters' });
   }
 
-  // Security: Derived company_id (ignore any sent from frontend)
   const companyId = req.user.companyId;
 
   try {
-    // 1. Create User in Supabase Auth (Onboarding trigger handles profile/company creation)
+    // 1. Create User in Supabase Auth
     const { data: authData, error: authError } = await supabase.auth.admin.createUser({
       email,
       password,
       email_confirm: true,
-      user_metadata: {
-        name,
-        company_id: companyId, // Passed to trigger if needed, though usually companies are associated differently
-        role: role || 'user'
-      }
+      user_metadata: { name, company_id: companyId, role: role || 'user' }
     });
 
     if (authError) {
@@ -409,24 +482,25 @@ app.post('/api/users', requireAdmin, async (req: any, res) => {
 
     const newUser = authData.user!;
 
-    // 2. The profile should be created by the SQL trigger 'on_auth_user_created'
-    // We update it with optional fields (name, role)
+    // 2. Use UPSERT to handle both new profiles and existing ones (if trigger already fired)
     const { data: profile, error: profileError } = await supabase
       .from('profiles')
-      .update({
-        name: name || (email ? email.split('@')[0] : 'Usuário'),
+      .upsert({
+        id: newUser.id,
+        name: name || username,
         role: role || 'user',
-        company_id: companyId
+        company_id: companyId,
+        phone: phone || ''
       })
-      .eq('id', newUser.id)
       .select()
       .single();
 
     if (profileError) {
       console.error(`[USER_CREATE_ERROR] Profile sync failure: ${profileError.message}`);
+      return res.status(500).json({ error: 'Erro ao sincronizar perfil do usuário' });
     }
 
-    res.json(profile || { id: newUser.id, username: newUser.email });
+    res.json(profile);
 
   } catch (err) {
     console.error('[USER_CREATE_EXCEPTION]', err);
@@ -535,7 +609,7 @@ app.get('/api/admin/data', requireAdmin, async (req: any, res) => {
       supabase.from('posts').select('*').eq('company_id', req.user.companyId).order('created_at', { ascending: false }),
       supabase.from('gallery').select('*').eq('company_id', req.user.companyId).order('created_at', { ascending: false }),
       supabase.from('testimonials').select('*').eq('company_id', req.user.companyId).order('created_at', { ascending: false }),
-      supabase.from('estimates').select('*').eq('company_id', req.user.companyId).order('created_at', { ascending: false }),
+      supabase.from('estimates').select('*, profiles(name)').eq('company_id', req.user.companyId).order('created_at', { ascending: false }),
       supabase.from('products').select('*').eq('company_id', req.user.companyId).order('name', { ascending: true }),
     ]);
 
@@ -546,10 +620,6 @@ app.get('/api/admin/data', requireAdmin, async (req: any, res) => {
 
     const settings = companyRes.data?.settings || {};
 
-    console.log(`[DEBUG_ADMIN_DATA] User=${req.user.id} Company=${req.user.companyId}`);
-    console.log(`[DEBUG_ADMIN_DATA] Quotes found: ${estimatesRes.data?.length || 0}`);
-    console.log(`[DEBUG_ADMIN_DATA] Users found: ${profilesRes?.data?.length || 0}`);
-
     res.json({
       settings,
       services: servicesRes.data || [],
@@ -557,9 +627,9 @@ app.get('/api/admin/data', requireAdmin, async (req: any, res) => {
       gallery: galleryRes.data || [],
       testimonials: testimonialsRes.data || [],
       quotes: (estimatesRes.data || []).map(q => {
-        let clientName = 'Cliente';
+        let clientName = (Array.isArray(q.profiles) ? q.profiles[0]?.name : q.profiles?.name) || 'Cliente';
         const notes = q.notes || '';
-        if (notes.startsWith('[CLIENT: ')) {
+        if (clientName === 'Cliente' && notes.startsWith('[CLIENT: ')) {
           const match = notes.match(/\[CLIENT: (.*?)\]/);
           if (match) clientName = match[1];
         }
@@ -574,7 +644,8 @@ app.get('/api/admin/data', requireAdmin, async (req: any, res) => {
       inventory: (productsRes.data || []).map(p => ({
         ...p,
         price: p.base_cost,
-        stock_quantity: p.stock_quantity || 0
+        stock_quantity: p.stock_quantity || 0,
+        availableM2: p.stock_quantity || 0
       })),
       users: (profilesRes?.data || []).map(u => ({
         ...u,
@@ -698,7 +769,7 @@ app.get('/api/gallery', async (req: any, res) => {
     .eq('company_id', companyId)
     .order('created_at', { ascending: false });
 
-  if (serviceId) query = query.eq('serviceId', serviceId);
+  if (serviceId) query = query.eq('service_id', serviceId);
   const { data } = await query;
   res.json(data || []);
 });
@@ -723,14 +794,7 @@ app.post('/api/gallery', requireAdmin, upload.array('images'), async (req: any, 
 });
 
 app.post('/api/gallery/delete/:id', requireAdmin, async (req: any, res) => {
-  const id = req.params.id; // UUID
-  const { data: item } = await supabase.from('gallery').select('imageUrl')
-    .eq('id', id).eq('company_id', req.user.companyId).single();
-
-  if (item?.imageUrl?.startsWith('/uploads/')) {
-    const fp = path.join(process.cwd(), item.imageUrl);
-    if (fs.existsSync(fp)) try { fs.unlinkSync(fp); } catch (_) { }
-  }
+  const id = req.params.id;
   await supabase.from('gallery').delete().eq('id', id).eq('company_id', req.user.companyId);
   res.json({ success: true });
 });
@@ -764,15 +828,10 @@ app.get('/api/testimonials', async (req: any, res) => {
     const { data: firstCompany } = await supabase.from('companies').select('id').limit(1).single();
     if (firstCompany) companyId = firstCompany.id;
   }
-
   if (!companyId) return res.json([]);
-
-  const { data } = await supabase.from('testimonials').select('*')
-    .eq('company_id', companyId)
-    .order('created_at', { ascending: false });
+  const { data } = await supabase.from('testimonials').select('*').eq('company_id', companyId).order('created_at', { ascending: false });
   res.json(data || []);
 });
-
 
 app.post('/api/testimonials', requireAdmin, async (req: any, res) => {
   const { author, content, rating } = req.body;
@@ -873,7 +932,7 @@ app.get('/api/quotes', authenticate, async (req: any, res) => {
   if (error) return res.status(500).json({ error: error.message });
 
   const mapped = (data || []).map(q => {
-    let clientName = 'Cliente';
+    let clientName = (Array.isArray(q.profiles) ? q.profiles[0]?.name : q.profiles?.name) || 'Cliente';
     const notes = q.notes || '';
     if (notes.startsWith('[CLIENT: ')) {
       const match = notes.match(/\[CLIENT: (.*?)\]/);
@@ -1056,6 +1115,9 @@ app.put('/api/quotes/:id/status', authenticate, async (req: any, res) => {
       confirmed_by: req.user.id,
       confirmed_at: new Date().toISOString()
     });
+
+    // Also debit inventory if needed (optional logic from later in the file)
+    // await debitInventory(id, ...); 
   }
 
   res.json(estimate);
@@ -1088,6 +1150,8 @@ async function debitInventory(estimateId: number, m2Needed: number, userId: stri
     remaining -= debit;
   }
 }
+
+// Duplicate status route removed
 
 app.post('/api/quotes/:id/discount', requireMaster, async (req: any, res) => {
   const id = req.params.id; // UUID
@@ -1182,6 +1246,24 @@ app.post('/api/inventory', requireAdmin, async (req: any, res) => {
   });
 });
 
+app.post('/api/inventory/batch', requireAdmin, async (req: any, res) => {
+  const { entries } = req.body || {};
+  if (!Array.isArray(entries)) return res.status(400).json({ error: 'entries required' });
+
+  const inserts = entries.map((e: any) => ({
+    company_id: req.user.companyId,
+    name: e.name || e.description || 'Produto s/ Nome',
+    description: e.description || e.name || '',
+    stock_quantity: parseFloat(e.stock_quantity) || ((parseFloat(e.widthM) || 1.2) * (parseFloat(e.lengthM) || 33)),
+    unit: 'm2',
+    base_cost: parseFloat(e.price) || parseFloat(e.costPerUnit) || 0
+  }));
+
+  const { data, error } = await supabase.from('products').insert(inserts).select();
+  if (error) return res.status(500).json({ error: error.message });
+  res.json(data);
+});
+
 app.delete('/api/inventory/:id', requireAdmin, async (req: any, res) => {
   await supabase.from('products').delete().eq('id', req.params.id).eq('company_id', req.user.companyId);
   res.json({ success: true });
@@ -1199,53 +1281,47 @@ app.get('/api/inventory/summary', requireAdmin, async (req: any, res) => {
 
 
 // =====================
-// PIX KEYS Routes (Fallback to companies.settings)
+// PIX KEYS Routes (dedicated table)
 // =====================
 app.get('/api/pix-keys', authenticate, async (req: any, res) => {
-  const { data: company } = await supabase.from('companies').select('settings').eq('id', req.user.companyId).single();
-  const pixKeys = company?.settings?.pixKeys || [];
-  res.json(pixKeys.filter((k: any) => k.active !== false));
+  const { data, error } = await supabase.from('pix_keys').select('*').eq('company_id', req.user.companyId).order('sort_order', { ascending: true });
+  if (error) return res.status(500).json({ error: error.message });
+  res.json((data || []).map(k => ({
+    ...k,
+    pixKey: k.pix_key,
+    pixCode: k.pix_code,
+    qrCodeUrl: k.qr_code_url,
+    sortOrder: k.sort_order
+  })));
 });
 
 app.post('/api/pix-keys', requireAdmin, async (req: any, res) => {
-  const { label, pixKey, keyType, bank, beneficiary, pixCode, qrCodeUrl } = req.body;
-  const { data: company } = await supabase.from('companies').select('settings').eq('id', req.user.companyId).single();
-  const settings = company?.settings || {};
-  const pixKeys = settings.pixKeys || [];
-
-  const newKey = {
-    id: Date.now(),
-    label, pixKey, keyType, bank, beneficiary, pixCode, qrCodeUrl,
-    active: true,
-    sortOrder: pixKeys.length
-  };
-
-  const updatedSettings = { ...settings, pixKeys: [...pixKeys, newKey] };
-  await supabase.from('companies').update({ settings: updatedSettings }).eq('id', req.user.companyId);
-  res.json(newKey);
+  const { label, pixKey, keyType, bank, beneficiary, pixCode, qrCodeUrl, sortOrder } = req.body;
+  const { data, error } = await supabase.from('pix_keys').insert({
+    company_id: req.user.companyId,
+    label,
+    pix_key: pixKey,
+    key_type: keyType,
+    bank,
+    beneficiary,
+    pix_code: pixCode,
+    qr_code_url: qrCodeUrl,
+    sort_order: sortOrder || 0
+  }).select().single();
+  if (error) return res.status(500).json({ error: error.message });
+  res.json(data);
 });
 
 app.put('/api/pix-keys/:id', requireAdmin, async (req: any, res) => {
-  const id = parseInt(req.params.id);
-  const { data: company } = await supabase.from('companies').select('settings').eq('id', req.user.companyId).single();
-  const settings = company?.settings || {};
-  const pixKeys = settings.pixKeys || [];
-
-  const updatedPixKeys = pixKeys.map((k: any) => k.id === id ? { ...k, ...req.body } : k);
-  const updatedSettings = { ...settings, pixKeys: updatedPixKeys };
-  await supabase.from('companies').update({ settings: updatedSettings }).eq('id', req.user.companyId);
-  res.json({ success: true });
+  const id = req.params.id;
+  const { data, error } = await supabase.from('pix_keys').update(req.body).eq('id', id).eq('company_id', req.user.companyId).select().single();
+  if (error) return res.status(500).json({ error: error.message });
+  res.json(data);
 });
 
 app.delete('/api/pix-keys/:id', requireAdmin, async (req: any, res) => {
-  const id = parseInt(req.params.id);
-  const { data: company } = await supabase.from('companies').select('settings').eq('id', req.user.companyId).single();
-  const settings = company?.settings || {};
-  const pixKeys = settings.pixKeys || [];
-
-  const updatedPixKeys = pixKeys.filter((k: any) => k.id !== id);
-  const updatedSettings = { ...settings, pixKeys: updatedPixKeys };
-  await supabase.from('companies').update({ settings: updatedSettings }).eq('id', req.user.companyId);
+  const id = req.params.id;
+  await supabase.from('pix_keys').delete().eq('id', id).eq('company_id', req.user.companyId);
   res.json({ success: true });
 });
 
@@ -1280,7 +1356,7 @@ app.post('/api/report-settings', requireAdmin, upload.single('reportLogoFile'), 
 // =====================
 app.get('/api/financial', requireAdmin, async (req: any, res) => {
   const { from, to } = req.query;
-  let query = supabase.from('payments').select('*, estimate:estimates(metadata)')
+  let query = supabase.from('payments').select('*, estimate:estimates(notes)')
     .eq('company_id', req.user.companyId)
     .order('confirmed_at', { ascending: false });
 
@@ -1290,35 +1366,52 @@ app.get('/api/financial', requireAdmin, async (req: any, res) => {
   const { data, error } = await query;
   if (error) return res.status(500).json({ error: error.message });
 
-  // Map to legacy format
-  const mapped = (data || []).map(p => ({
-    id: p.id,
-    clientName: p.estimate?.metadata?.clientName || 'Cliente',
-    netValue: p.amount,
-    paymentMethod: p.payment_method,
-    paidAt: p.confirmed_at
-  }));
+  // Map to legacy format with Fallbacks
+  const mapped = (data || []).map(p => {
+    let clientName = 'Cliente';
+    const notes = p.estimate?.notes || '';
+    if (notes.startsWith('[CLIENT: ')) {
+      const match = notes.match(/\[CLIENT: (.*?)\]/);
+      if (match) clientName = match[1];
+    }
+
+    return {
+      id: p.id,
+      quoteId: p.estimate_id,
+      clientName,
+      grossValue: p.amount,
+      discountValue: 0,
+      netValue: p.amount,
+      paymentMethod: p.payment_method,
+      paidAt: p.confirmed_at
+    };
+  });
   res.json(mapped);
 });
 
 app.get('/api/financial/summary', requireAdmin, async (req: any, res) => {
   const now = new Date();
+  const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
   const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
 
-  const { data: payments } = await supabase.from('payments')
+  const { data: all } = await supabase.from('payments')
     .select('amount, confirmed_at')
-    .eq('company_id', req.user.companyId)
-    .eq('status', 'confirmed');
+    .eq('company_id', req.user.companyId);
 
-  const totalAll = (payments || []).reduce((acc, p) => acc + parseFloat(p.amount), 0);
-  const totalMonth = (payments || []).filter(p => p.confirmed_at >= monthStart).reduce((acc, p) => acc + parseFloat(p.amount), 0);
+  if (!all) return res.json({ totalAll: 0, totalToday: 0, totalMonth: 0, countAll: 0, countToday: 0, countMonth: 0, ticketAverage: 0 });
+
+  const sum = (rows: any[]) => rows.reduce((a, r) => a + parseFloat(r.amount || 0), 0);
+  const today = all.filter(r => r.confirmed_at >= todayStart);
+  const month = all.filter(r => r.confirmed_at >= monthStart);
 
   res.json({
-    totalAll,
-    totalToday: 0, // Simplified for now
-    totalMonth,
-    countAll: payments?.length || 0,
-    ticketAverage: (payments?.length || 0) > 0 ? totalAll / (payments?.length || 1) : 0
+    totalAll: sum(all),
+    totalToday: sum(today),
+    totalMonth: sum(month),
+    countAll: all.length,
+    countToday: today.length,
+    countMonth: month.length,
+    ticketAverage: all.length > 0 ? sum(all) / all.length : 0,
   });
 });
 

@@ -82,12 +82,18 @@ async function parseSession(req: express.Request): Promise<any | null> {
     try {
         const decoded = JSON.parse(Buffer.from(session, 'base64').toString('utf8'));
         const { data: user } = await supabase
-            .from('users')
-            .select('id,username,name,email,role,active')
+            .from('profiles')
+            .select('id,username,name,email,role,active,company_id')
             .eq('id', decoded.userId)
             .eq('active', true)
             .single();
-        return user || null;
+        if (user) {
+            return {
+                ...user,
+                companyId: user.company_id
+            };
+        }
+        return null;
     } catch { return null; }
 }
 
@@ -160,12 +166,11 @@ app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 app.post('/api/login', async (req, res) => {
     const { username, password } = req.body || {};
     const ip = getClientIP(req);
-    const { data: users } = await supabase.from('users')
+    const { data: users } = await supabase.from('profiles')
         .select('*').eq('username', username).eq('active', true).limit(1);
     const user = users?.[0];
     if (user && bcrypt.compareSync(password, user.password)) {
         setSessionCookie(res, user.id);
-        // Also clear old cookie
         res.setHeader('Set-Cookie', [
             `session=${Buffer.from(JSON.stringify({ userId: user.id })).toString('base64')}; HttpOnly; Secure; SameSite=Lax; Max-Age=${30 * 24 * 3600}; Path=/`,
             'admin_session=; HttpOnly; Secure; SameSite=Lax; Max-Age=0; Path=/',
@@ -173,13 +178,13 @@ app.post('/api/login', async (req, res) => {
         logUserAction({ userId: user.id, username: user.username, action: 'LOGIN_SUCCESS', details: `Login bem-sucedido`, menu: 'Auth', ipAddress: ip });
         return res.json({ success: true, role: user.role, name: user.name || user.username });
     }
-    logUserAction({ username: username || 'unknown', action: 'LOGIN_FAILED', details: `Tentativa de login falhou para: ${username || '(vazio)'}`, menu: 'Auth', ipAddress: ip, errorMessage: !user ? 'Usu\u00e1rio n\u00e3o encontrado' : 'Senha incorreta' });
+    logUserAction({ username: username || 'unknown', action: 'LOGIN_FAILED', details: `Tentativa de login falhou para: ${username || '(vazio)'}`, menu: 'Auth', ipAddress: ip, errorMessage: !user ? 'Usuário não encontrado' : 'Senha incorreta' });
     return res.status(401).json({ error: 'Credenciais inválidas' });
 });
 
 app.post('/api/logout', async (req, res) => {
     const user = await parseSession(req);
-    if (user) logUserAction({ userId: user.id, username: user.username, action: 'LOGOUT', details: 'Usu\u00e1rio fez logout', menu: 'Auth', ipAddress: getClientIP(req) });
+    if (user) logUserAction({ userId: user.id, username: user.username, action: 'LOGOUT', details: 'Usuário fez logout', menu: 'Auth', ipAddress: getClientIP(req) });
     res.setHeader('Set-Cookie', [
         'session=; HttpOnly; Secure; SameSite=Lax; Max-Age=0; Path=/',
         'admin_session=; HttpOnly; Secure; SameSite=Lax; Max-Age=0; Path=/',
@@ -190,27 +195,21 @@ app.post('/api/logout', async (req, res) => {
 app.get('/api/auth/check', async (req, res) => {
     const user = await parseSession(req);
     if (user) return res.json({ authenticated: true, role: user.role, name: user.name || user.username, id: user.id });
-    // Legacy fallback
     const cookies = parseCookies(req as any);
     if (cookies['admin_session'] === 'authenticated') {
-        const { data: adminUser } = await supabase.from('users').select('id,username,role,name').eq('username', 'admin').single();
-        if (adminUser) return res.json({ authenticated: true, role: adminUser.role, name: adminUser.name || adminUser.username, id: adminUser.id });
+        const { data: adminUser } = await supabase.from('profiles').select('id,username,role,name,company_id').eq('username', 'admin').single();
+        if (adminUser) return res.json({ authenticated: true, role: adminUser.role, name: adminUser.name || adminUser.username, id: adminUser.id, companyId: adminUser.company_id });
     }
     return res.json({ authenticated: false });
 });
 
 app.get('/api/auth/me', authenticate as any, (req: any, res) => res.json(req.user));
 
-app.post('/api/auth/change-password', authenticate as any, async (req: any, res) => {
-    const { newPassword } = req.body || {};
-    if (!newPassword || newPassword.length < 6) return res.status(400).json({ error: 'Mínimo 6 caracteres' });
-    await supabase.from('users').update({ password: bcrypt.hashSync(newPassword, 10) }).eq('id', req.user.id);
-    res.json({ success: true });
-});
-
 // ── USERS ───────────────────────────────────────────────────────────────────
-app.get('/api/users', requireAdmin as any, async (_req, res) => {
-    const { data } = await supabase.from('users').select('id,username,name,email,phone,role,active,"createdAt"').order('createdAt', { ascending: false });
+app.get('/api/users', requireAdmin as any, async (req: any, res) => {
+    const { data } = await supabase.from('profiles').select('id,username,name,email,phone,role,active,created_at')
+        .eq('company_id', req.user.companyId)
+        .order('created_at', { ascending: false });
     res.json(data || []);
 });
 
@@ -219,35 +218,31 @@ app.post('/api/users', requireAdmin as any, async (req: any, res) => {
     if (!username || !password) return res.status(400).json({ error: 'Username e senha obrigatórios' });
     if ((role === 'admin' || role === 'master') && req.user.role !== 'master')
         return res.status(403).json({ error: 'Apenas master pode criar admins' });
-    const { data, error } = await supabase.from('users').insert({
-        username, password: bcrypt.hashSync(password, 10), name, email, phone, role: role || 'user', active: true
+    const { data, error } = await supabase.from('profiles').insert({
+        username,
+        password: bcrypt.hashSync(password, 10),
+        name, email, phone, role: role || 'user', active: true, company_id: req.user.companyId
     }).select('id,username,name,email,phone,role,active').single();
     if (error) return res.status(500).json({ error: error.message });
     res.json(data);
 });
 
 app.put('/api/users/:id', requireAdmin as any, async (req: any, res) => {
-    const id = parseInt(req.params.id);
+    const id = req.params.id;
     const { name, email, phone, active, role, password } = req.body || {};
     const updateData: any = { name, email, phone, active };
     if (role !== undefined && req.user.role === 'master') updateData.role = role;
     if (password) updateData.password = bcrypt.hashSync(password, 10);
-    const { data, error } = await supabase.from('users').update(updateData).eq('id', id).select('id,username,name,email,phone,role,active').single();
+    const { data, error } = await supabase.from('profiles').update(updateData)
+        .eq('id', id).eq('company_id', req.user.companyId).select('id,username,name,email,phone,role,active').single();
     if (error) return res.status(500).json({ error: error.message });
     res.json(data);
 });
 
 app.delete('/api/users/:id', requireAdmin as any, async (req: any, res) => {
-    const id = parseInt(req.params.id);
+    const id = req.params.id;
     if (id === req.user.id) return res.status(400).json({ error: 'Não pode excluir a si mesmo' });
-    await supabase.from('users').delete().eq('id', id);
-    res.json({ success: true });
-});
-
-app.post('/api/admin/users/bulk-admin', requireAdmin as any, async (req: any, res) => {
-    const { userIds, isAdmin } = req.body || {};
-    if (!Array.isArray(userIds) || userIds.length === 0) return res.status(400).json({ error: 'userIds obrigatório' });
-    await supabase.from('users').update({ role: isAdmin ? 'admin' : 'user' }).in('id', userIds);
+    await supabase.from('profiles').delete().eq('id', id).eq('company_id', req.user.companyId);
     res.json({ success: true });
 });
 
@@ -278,42 +273,44 @@ app.post('/api/settings', requireMaster as any, async (req, res) => {
 app.get('/api/admin/data', authenticate as any, async (req: any, res) => {
     try {
         const isAdminOrMaster = req.user.role === 'admin' || req.user.role === 'master';
-        const [settingsRes, servicesRes, postsRes, galleryRes, testimonialsRes, inventoryRes] = await Promise.all([
-            supabase.from('settings').select('*'),
-            supabase.from('services').select('*'),
-            supabase.from('posts').select('*').order('createdAt', { ascending: false }),
-            supabase.from('gallery').select('*').order('createdAt', { ascending: false }),
-            supabase.from('testimonials').select('*').order('createdAt', { ascending: false }),
-            supabase.from('inventory').select('*').order('purchasedAt', { ascending: false }),
+        const companyId = req.user.companyId;
+        const [settingsRes, servicesRes, postsRes, galleryRes, testimonialsRes, productsRes] = await Promise.all([
+            supabase.from('settings').select('*').eq('company_id', companyId),
+            supabase.from('services').select('*').eq('company_id', companyId),
+            supabase.from('posts').select('*').eq('company_id', companyId).order('created_at', { ascending: false }),
+            supabase.from('gallery').select('*').eq('company_id', companyId).order('created_at', { ascending: false }),
+            supabase.from('testimonials').select('*').eq('company_id', companyId).order('created_at', { ascending: false }),
+            supabase.from('products').select('*').eq('company_id', companyId).order('created_at', { ascending: false }),
         ]);
-        // Quotes: user sees only own, admin/master sees all
-        let quotesQuery = supabase.from('quotes').select('*').order('createdAt', { ascending: false });
-        if (!isAdminOrMaster) quotesQuery = quotesQuery.eq('clientId', req.user.id);
+        let quotesQuery = supabase.from('estimates').select('*, profiles(name)').eq('company_id', companyId).order('created_at', { ascending: false });
+        if (!isAdminOrMaster) quotesQuery = quotesQuery.eq('client_id', req.user.id);
         const quotesRes = await quotesQuery;
-        const usersRes = isAdminOrMaster
-            ? await supabase.from('users').select('id,username,name,email,phone,role,active,"createdAt"').order('createdAt', { ascending: false })
+        const profilesRes = isAdminOrMaster
+            ? await supabase.from('profiles').select('id,username,name,email,phone,role,active,created_at').eq('company_id', companyId).order('created_at', { ascending: false })
             : { data: [] };
         const settings = (settingsRes.data || []).reduce((acc: any, c: any) => ({ ...acc, [c.key]: c.value }), {});
         res.json({
-            settings,
-            services: servicesRes.data || [],
-            posts: postsRes.data || [],
-            gallery: galleryRes.data || [],
+            settings, services: servicesRes.data || [], posts: postsRes.data || [], gallery: galleryRes.data || [],
             testimonials: testimonialsRes.data || [],
-            quotes: quotesRes.data || [],
-            inventory: isAdminOrMaster ? (inventoryRes.data || []) : [],
-            users: usersRes.data || [],
+            quotes: (quotesRes.data || []).map((q: any) => ({
+                ...q, clientName: q.profiles?.name || 'Cliente', createdAt: q.created_at, totalValue: q.total_amount || 0, finalValue: q.final_amount || 0
+            })),
+            inventory: isAdminOrMaster ? (productsRes.data || []) : [],
+            users: (profilesRes.data || []).map((u: any) => ({ ...u, createdAt: u.created_at })),
             currentUser: req.user,
         });
-    } catch (e) { res.status(500).json({ error: 'Internal server error' }); }
+    } catch (e) {
+        console.error('[ADMIN_DATA_ERROR]', e);
+        res.status(500).json({ error: 'Internal server error' });
+    }
 });
 
 // ── SERVICES ─────────────────────────────────────────────────────────────────
-app.get('/api/services', async (_req, res) => {
-    const { data } = await supabase.from('services').select('*');
+app.get('/api/services', authenticate as any, async (req: any, res) => {
+    const { data } = await supabase.from('services').select('*').eq('company_id', req.user.companyId);
     res.json(data || []);
 });
-app.post('/api/services', requireAdmin as any, async (req, res) => {
+app.post('/api/services', requireAdmin as any, async (req: any, res) => {
     const ct = req.headers['content-type'] || '';
     let title: string, description: string, imageUrl: string | null = null;
     if (ct.includes('multipart/form-data')) {
@@ -322,29 +319,21 @@ app.post('/api/services', requireAdmin as any, async (req, res) => {
         const f = files.find(x => x.fieldname === 'image');
         if (f) imageUrl = await uploadToStorage(f.buffer, f.originalname, f.mimetype);
     } else ({ title, description, imageUrl } = req.body || {});
-    const { data, error } = await supabase.from('services').insert({ title, description, imageUrl }).select().single();
+    const { data, error } = await supabase.from('services').insert({ title, description, imageUrl, company_id: req.user.companyId }).select().single();
     if (error) return res.status(500).json({ error: error.message });
     res.json(data);
 });
-app.post('/api/services/delete/:id', requireAdmin as any, async (req, res) => {
-    await supabase.from('services').delete().eq('id', parseInt(req.params.id));
+app.post('/api/services/delete/:id', requireAdmin as any, async (req: any, res) => {
+    await supabase.from('services').delete().eq('id', req.params.id).eq('company_id', req.user.companyId);
     res.json({ success: true });
-});
-app.post('/api/services/:id/home-image', requireAdmin as any, async (req, res) => {
-    const { files } = await parseMultipart(req);
-    const f = files.find(x => x.fieldname === 'homeImage');
-    if (!f) return res.status(400).json({ error: 'No file' });
-    const homeImageUrl = await uploadToStorage(f.buffer, f.originalname, f.mimetype);
-    await supabase.from('services').update({ homeImageUrl }).eq('id', parseInt(req.params.id));
-    res.json({ success: true, homeImageUrl });
 });
 
 // ── POSTS ─────────────────────────────────────────────────────────────────────
-app.get('/api/posts', async (_req, res) => {
-    const { data } = await supabase.from('posts').select('*').order('createdAt', { ascending: false });
+app.get('/api/posts', authenticate as any, async (req: any, res) => {
+    const { data } = await supabase.from('posts').select('*').eq('company_id', req.user.companyId).order('created_at', { ascending: false });
     res.json(data || []);
 });
-app.post('/api/posts', requireAdmin as any, async (req, res) => {
+app.post('/api/posts', requireAdmin as any, async (req: any, res) => {
     const ct = req.headers['content-type'] || '';
     let title: string, content: string, imageUrl: string | null = null;
     if (ct.includes('multipart/form-data')) {
@@ -353,537 +342,237 @@ app.post('/api/posts', requireAdmin as any, async (req, res) => {
         const f = files.find(x => x.fieldname === 'image');
         if (f) imageUrl = await uploadToStorage(f.buffer, f.originalname, f.mimetype);
     } else ({ title, content, imageUrl } = req.body || {});
-    const { data, error } = await supabase.from('posts').insert({ title, content, imageUrl }).select().single();
+    const { data, error } = await supabase.from('posts').insert({ title, content, imageUrl, company_id: req.user.companyId }).select().single();
     if (error) return res.status(500).json({ error: error.message });
     res.json(data);
 });
-app.post('/api/posts/delete/:id', requireAdmin as any, async (req, res) => {
-    await supabase.from('posts').delete().eq('id', parseInt(req.params.id));
+app.post('/api/posts/delete/:id', requireAdmin as any, async (req: any, res) => {
+    await supabase.from('posts').delete().eq('id', req.params.id).eq('company_id', req.user.companyId);
     res.json({ success: true });
 });
 
 // ── GALLERY ───────────────────────────────────────────────────────────────────
-app.get('/api/gallery', async (req, res) => {
+app.get('/api/gallery', authenticate as any, async (req: any, res) => {
     const { serviceId } = req.query;
-    let q = supabase.from('gallery').select('*').order('createdAt', { ascending: false });
-    if (serviceId) q = q.eq('serviceId', serviceId);
+    let q = supabase.from('gallery').select('*').eq('company_id', req.user.companyId).order('created_at', { ascending: false });
+    if (serviceId) q = q.eq('service_id', serviceId);
     const { data } = await q;
-    res.json(data || []);
+    res.json((data || []).map(i => ({ ...i, createdAt: i.created_at, serviceId: i.service_id })));
 });
-app.post('/api/gallery', requireAdmin as any, async (req, res) => {
+app.post('/api/gallery', requireAdmin as any, async (req: any, res) => {
     const { fields, files } = await parseMultipart(req);
     if (!files.length) return res.status(400).json({ error: 'At least one image required' });
-    const serviceId = fields.serviceId ? parseInt(fields.serviceId) : null;
+    const serviceId = fields.serviceId || null;
     const items = [];
     for (const f of files) {
         const url = await uploadToStorage(f.buffer, f.originalname, f.mimetype);
-        items.push({ imageUrl: url, description: fields.description || '', serviceId });
+        items.push({ imageUrl: url, description: fields.description || '', service_id: serviceId, company_id: req.user.companyId });
     }
     const { data, error } = await supabase.from('gallery').insert(items).select();
     if (error) return res.status(500).json({ error: error.message });
     res.json(data);
 });
-app.post('/api/gallery/bulk-delete', requireAdmin as any, async (req, res) => {
+app.post('/api/gallery/bulk-delete', requireAdmin as any, async (req: any, res) => {
     const { ids } = req.body || {};
     if (!Array.isArray(ids) || !ids.length) return res.status(400).json({ error: 'ids required' });
-    await supabase.from('gallery').delete().in('id', ids.map(Number));
+    await supabase.from('gallery').delete().in('id', ids).eq('company_id', req.user.companyId);
     res.json({ success: true });
 });
-app.post('/api/gallery/delete/:id', requireAdmin as any, async (req, res) => {
-    await supabase.from('gallery').delete().eq('id', parseInt(req.params.id));
+app.post('/api/gallery/delete/:id', requireAdmin as any, async (req: any, res) => {
+    await supabase.from('gallery').delete().eq('id', req.params.id).eq('company_id', req.user.companyId);
     res.json({ success: true });
 });
 
 // ── TESTIMONIALS ──────────────────────────────────────────────────────────────
-app.get('/api/testimonials', async (_req, res) => {
-    const { data } = await supabase.from('testimonials').select('*').order('createdAt', { ascending: false });
-    res.json(data || []);
+app.get('/api/testimonials', authenticate as any, async (req: any, res) => {
+    const { data } = await supabase.from('testimonials').select('*').eq('company_id', req.user.companyId).order('created_at', { ascending: false });
+    res.json((data || []).map(i => ({ ...i, createdAt: i.created_at })));
 });
-app.post('/api/testimonials', requireAdmin as any, async (req, res) => {
+app.post('/api/testimonials', requireAdmin as any, async (req: any, res) => {
     const { author, content, rating } = req.body || {};
-    const { data, error } = await supabase.from('testimonials').insert({ author, content, rating: rating || 5 }).select().single();
+    const { data, error } = await supabase.from('testimonials').insert({ author, content, rating: rating || 5, company_id: req.user.companyId }).select().single();
     if (error) return res.status(500).json({ error: error.message });
     res.json(data);
 });
-app.post('/api/testimonials/delete/:id', requireAdmin as any, async (req, res) => {
-    await supabase.from('testimonials').delete().eq('id', parseInt(req.params.id));
+app.post('/api/testimonials/delete/:id', requireAdmin as any, async (req: any, res) => {
+    await supabase.from('testimonials').delete().eq('id', req.params.id).eq('company_id', req.user.companyId);
     res.json({ success: true });
 });
 
 // ── QUOTES ────────────────────────────────────────────────────────────────────
-app.get('/api/quotes/pending-count', requireAdmin as any, async (_req, res) => {
-    const { count } = await supabase.from('quotes').select('id', { count: 'exact', head: true }).eq('status', 'pending');
+app.get('/api/quotes/pending-count', requireAdmin as any, async (req: any, res) => {
+    const { count } = await supabase.from('estimates').select('id', { count: 'exact', head: true }).eq('company_id', req.user.companyId).eq('status', 'pending');
     res.json({ count: count || 0 });
 });
-
 app.get('/api/quotes', authenticate as any, async (req: any, res) => {
-    let q = supabase.from('quotes').select('*').order('createdAt', { ascending: false });
-    if (req.user.role === 'user') q = q.eq('clientId', req.user.id);
+    let q = supabase.from('estimates').select('*').eq('company_id', req.user.companyId).order('created_at', { ascending: false });
+    if (req.user.role === 'user') q = q.eq('client_id', req.user.id);
     const { data, error } = await q;
     if (error) return res.status(500).json({ error: error.message });
-    res.json(data || []);
+    res.json((data || []).map((q: any) => ({ ...q, createdAt: q.created_at, totalValue: q.total_amount || 0, finalValue: q.final_amount || 0 })));
 });
-
 app.post('/api/quotes', authenticate as any, async (req: any, res) => {
     const { clientName, bends, notes, totalValue: passedTotal, adminCreated, status: requestedStatus } = req.body || {};
-    let totalM2 = 0;
-    if (Array.isArray(bends)) {
-        for (const b of bends) totalM2 += parseFloat(b.m2 || 0);
-    }
-    const { data: settRows } = await supabase.from('settings').select('*');
+    let totalM2 = 0; if (Array.isArray(bends)) { for (const b of bends) totalM2 += parseFloat(b.m2 || 0); }
+    const { data: settRows } = await supabase.from('settings').select('*').eq('company_id', req.user.companyId);
     const sett = (settRows || []).reduce((a: any, s: any) => ({ ...a, [s.key]: s.value }), {});
     const pricePerM2 = parseFloat(sett.pricePerM2 || '50');
     const totalValue = adminCreated && passedTotal ? parseFloat(passedTotal) : totalM2 * pricePerM2;
-    const quoteStatus = requestedStatus === 'rascunho' ? 'rascunho' : 'pending';
-
-    const { data: quote, error } = await supabase.from('quotes').insert({
-        clientId: req.user.id,
-        clientName: clientName || req.user.name || req.user.username,
-        createdBy: req.user.id,
-        totalM2, totalValue, finalValue: totalValue, notes, status: quoteStatus,
+    const quoteStatus = requestedStatus === 'rascunho' ? 'draft' : 'pending';
+    const quoteNotes = clientName ? `[CLIENT: ${clientName}] ${notes || ''}` : (notes || '');
+    const { data: quote, error } = await supabase.from('estimates').insert({
+        company_id: req.user.companyId, client_id: req.user.id, total_amount: totalValue, final_amount: totalValue, notes: quoteNotes, status: quoteStatus
     }).select().single();
     if (error) return res.status(500).json({ error: error.message });
-
     if (Array.isArray(bends) && bends.length > 0) {
-        await supabase.from('quote_bends').insert(
-            bends.map((b: any, i: number) => ({
-                quoteId: quote.id, bendOrder: i + 1,
-                risks: b.risks, totalWidthCm: b.totalWidthCm,
-                roundedWidthCm: b.roundedWidthCm, lengths: b.lengths,
-                totalLengthM: b.totalLengthM, m2: b.m2,
-                svgDataUrl: b.svgDataUrl || null, // save the visual preview
-            }))
-        );
-    }
-
-    // WhatsApp notification log
-    const phone = sett.whatsappMaster || sett.whatsapp;
-    if (phone) console.log(`📱 Novo orçamento #${quote.id} - ${quote.clientName} - R$ ${totalValue.toFixed(2)}`);
-
-    res.json(quote);
-});
-
-// ── EDIT QUOTE ────────────────────────────────────────────────────────────
-app.put('/api/quotes/:id', authenticate as any, async (req: any, res) => {
-    const id = parseInt(req.params.id);
-    const { clientName, bends, notes } = req.body || {};
-    const { data: current } = await supabase.from('quotes').select('*').eq('id', id).single();
-    if (!current) return res.status(404).json({ error: 'Orçamento não encontrado' });
-    if (req.user.role === 'user' && current.clientId !== req.user.id) return res.status(403).json({ error: 'Acesso negado' });
-    if (['in_production', 'paid', 'finished'].includes(current.status) && req.user.role === 'user') {
-        return res.status(403).json({ error: 'Orçamento em produção não pode ser editado' });
-    }
-    let totalM2 = 0;
-    if (Array.isArray(bends)) { for (const b of bends) totalM2 += parseFloat(b.m2 || 0); }
-    const { data: settRows } = await supabase.from('settings').select('*');
-    const sett = (settRows || []).reduce((a: any, s: any) => ({ ...a, [s.key]: s.value }), {});
-    const pricePerM2 = parseFloat(sett.pricePerM2 || '50');
-    const totalValue = totalM2 * pricePerM2;
-    const { data: quote, error } = await supabase.from('quotes').update({
-        clientName: clientName || current.clientName, totalM2, totalValue,
-        finalValue: totalValue, notes, updatedAt: new Date().toISOString(),
-    }).eq('id', id).select().single();
-    if (error) return res.status(500).json({ error: error.message });
-    await supabase.from('quote_bends').delete().eq('quoteId', id);
-    if (Array.isArray(bends) && bends.length > 0) {
-        await supabase.from('quote_bends').insert(bends.map((b: any, i: number) => ({
-            quoteId: id, bendOrder: i + 1, risks: b.risks, totalWidthCm: b.totalWidthCm,
-            roundedWidthCm: b.roundedWidthCm, lengths: b.lengths,
-            totalLengthM: b.totalLengthM, m2: b.m2, svgDataUrl: b.svgDataUrl || null,
+        await supabase.from('estimate_items').insert(bends.map((b: any) => ({
+            estimate_id: quote.id, description: `[BEND] ${JSON.stringify(b)}`, quantity: 1, unit_price: pricePerM2, total_price: b.m2 * pricePerM2
         })));
     }
     res.json(quote);
 });
-
-// ── GET BENDS FOR A QUOTE ─────────────────────────────────────────────────
-app.get('/api/quotes/:id/bends', authenticate as any, async (req: any, res) => {
-    const id = parseInt(req.params.id);
-    const { data: quote } = await supabase.from('quotes').select('clientId').eq('id', id).single();
-    if (!quote) return res.status(404).json({ error: 'Orçamento não encontrado' });
-    if (req.user.role === 'user' && quote.clientId !== req.user.id) return res.status(403).json({ error: 'Acesso negado' });
-    const { data, error } = await supabase.from('quote_bends').select('*').eq('quoteId', id).order('bendOrder');
-    if (error) return res.status(500).json({ error: error.message });
-    res.json(data || []);
-});
-
-app.put('/api/quotes/:id/status', authenticate as any, async (req: any, res) => {
-    const id = parseInt(req.params.id);
-    const { status, finalValue, notes } = req.body || {};
-    const isAdminOrMaster = req.user.role === 'admin' || req.user.role === 'master';
-
-    // Get current quote to check ownership and current status
-    const { data: current } = await supabase.from('quotes').select('*').eq('id', id).single();
+app.put('/api/quotes/:id', authenticate as any, async (req: any, res) => {
+    const id = req.params.id;
+    const { clientName, bends, notes } = req.body || {};
+    const { data: current } = await supabase.from('estimates').select('*').eq('id', id).eq('company_id', req.user.companyId).single();
     if (!current) return res.status(404).json({ error: 'Orçamento não encontrado' });
-
-    // Regular users can only cancel their own unpaid quotes
-    if (req.user.role === 'user') {
-        if (current.clientId !== req.user.id) return res.status(403).json({ error: 'Acesso negado' });
-        if (status !== 'cancelled') return res.status(403).json({ error: 'Usuários comuns só podem cancelar' });
-        if (current.status === 'paid') return res.status(403).json({ error: 'Orçamento já pago não pode ser cancelado' });
-    }
-
-    const updateData: any = { status, updatedAt: new Date().toISOString() };
-    if (finalValue !== undefined && isAdminOrMaster) updateData.finalValue = parseFloat(finalValue);
-    if (notes !== undefined) updateData.notes = notes;
-    if (status === 'paid') { updateData.paidAt = new Date().toISOString(); updateData.paidBy = req.user.id; }
-
-    const { data: quote, error } = await supabase.from('quotes').update(updateData).eq('id', id).select().single();
+    if (req.user.role === 'user' && current.client_id !== req.user.id) return res.status(403).json({ error: 'Acesso negado' });
+    let totalM2 = 0; if (Array.isArray(bends)) { for (const b of bends) totalM2 += parseFloat(b.m2 || 0); }
+    const { data: settRows } = await supabase.from('settings').select('*').eq('company_id', req.user.companyId);
+    const sett = (settRows || []).reduce((a: any, s: any) => ({ ...a, [s.key]: s.value }), {});
+    const pricePerM2 = parseFloat(sett.pricePerM2 || '50');
+    const totalValue = totalM2 * pricePerM2;
+    const quoteNotes = clientName ? `[CLIENT: ${clientName}] ${notes || ''}` : (notes || current.notes || '');
+    const { data: quote, error } = await supabase.from('estimates').update({
+        total_amount: totalValue, final_amount: totalValue, notes: quoteNotes, updated_at: new Date().toISOString()
+    }).eq('id', id).eq('company_id', req.user.companyId).select().single();
     if (error) return res.status(500).json({ error: error.message });
-
-    // ── Financial: CREATE or UPDATE record on paid / in_production / finished ──
-    if ((status === 'in_production' || status === 'paid' || status === 'finished') && quote) {
-        try {
-            const { data: existing } = await supabase.from('financial_records').select('id').eq('quoteId', id).single();
-            if (existing) {
-                const upd: any = { netValue: quote.finalValue || quote.totalValue };
-                if (status === 'paid') upd.paidAt = new Date().toISOString();
-                await supabase.from('financial_records').update(upd).eq('quoteId', id);
-                console.log('[FINANCIAL] Updated record for quote', id, 'status:', status);
-            } else {
-                const { error: finErr } = await supabase.from('financial_records').insert({
-                    quoteId: id, clientName: quote.clientName,
-                    grossValue: quote.totalValue, discountValue: quote.discountValue || 0,
-                    netValue: quote.finalValue || quote.totalValue, paymentMethod: 'pix',
-                    paidAt: status === 'paid' ? new Date().toISOString() : null,
-                    createdAt: new Date().toISOString(),
-                });
-                if (finErr) console.error('[FINANCIAL] Error creating record:', finErr.message, finErr.details, finErr.hint);
-                else console.log('[FINANCIAL] Record created for quote', id, 'status:', status);
-            }
-        } catch (e: any) { console.error('[FINANCIAL] Exception:', e.message); }
+    await supabase.from('estimate_items').delete().eq('estimate_id', id);
+    if (Array.isArray(bends) && bends.length > 0) {
+        await supabase.from('estimate_items').insert(bends.map((b: any) => ({
+            estimate_id: id, description: `[BEND] ${JSON.stringify(b)}`, quantity: 1, unit_price: pricePerM2, total_price: b.m2 * pricePerM2
+        })));
     }
-
-    // ── Financial + Inventory: CLEANUP on reopen (pending) or cancel ──────
-    if ((status === 'pending' || status === 'cancelled') && quote) {
-        // Delete financial record
-        await supabase.from('financial_records').delete().eq('quoteId', id);
-        console.log('[FINANCIAL] Deleted record for reopened/cancelled quote', id);
-
-        // Restore inventory that was deducted
-        const { data: txns } = await supabase.from('inventory_transactions')
-            .select('*').eq('quoteId', id).eq('type', 'consumption');
-        if (txns && txns.length > 0) {
-            for (const tx of txns) {
-                const { data: inv } = await supabase.from('inventory').select('availableM2').eq('id', tx.inventoryId).single();
-                if (inv) {
-                    await supabase.from('inventory').update({
-                        availableM2: parseFloat(inv.availableM2) + parseFloat(tx.m2Amount)
-                    }).eq('id', tx.inventoryId);
-                }
-            }
-            // Delete ALL movements for this quote (consumption + restoration)
-            await supabase.from('inventory_transactions').delete().eq('quoteId', id);
-            console.log('[INVENTORY] Restored and cleaned movements for quote', id);
-        }
+    res.json(quote);
+});
+app.get('/api/quotes/:id/bends', authenticate as any, async (req: any, res) => {
+    const id = req.params.id;
+    const { data: quote } = await supabase.from('estimates').select('client_id').eq('id', id).eq('company_id', req.user.companyId).single();
+    if (!quote) return res.status(404).json({ error: 'Orçamento não encontrado' });
+    if (req.user.role === 'user' && quote.client_id !== req.user.id) return res.status(403).json({ error: 'Acesso negado' });
+    const { data, error } = await supabase.from('estimate_items').select('description').eq('estimate_id', id);
+    if (error) return res.status(500).json({ error: error.message });
+    res.json((data || []).map((i: any) => {
+        if (i.description && i.description.startsWith('[BEND] ')) { try { return JSON.parse(i.description.substring(7)); } catch { return {}; } }
+        return {};
+    }));
+});
+app.put('/api/quotes/:id/status', authenticate as any, async (req: any, res) => {
+    const id = req.params.id; const { status, finalValue, notes } = req.body || {};
+    const { data: current } = await supabase.from('estimates').select('*').eq('id', id).eq('company_id', req.user.companyId).single();
+    if (!current) return res.status(404).json({ error: 'Orçamento não encontrado' });
+    if (req.user.role === 'user' && current.client_id !== req.user.id) return res.status(403).json({ error: 'Acesso negado' });
+    const updateData: any = { status, updated_at: new Date().toISOString() };
+    if (finalValue !== undefined && (req.user.role === 'admin' || req.user.role === 'master')) updateData.final_amount = parseFloat(finalValue);
+    if (notes !== undefined) updateData.notes = notes;
+    const { data: quote, error } = await supabase.from('estimates').update(updateData).eq('id', id).eq('company_id', req.user.companyId).select().single();
+    if (error) return res.status(500).json({ error: error.message });
+    if (status === 'paid' && quote) {
+        await supabase.from('payments').insert({ company_id: req.user.companyId, estimate_id: id, amount: quote.final_amount || quote.total_amount, payment_method: 'pix', status: 'completed', paid_at: new Date().toISOString() });
     }
-
-    // ── Inventory deduction on in_production or finished ─────────────────
-    if ((status === 'in_production' || status === 'finished') && quote?.totalM2) {
-        // Check if already deducted (prevent double deduction)
-        const { data: existingTxns } = await supabase.from('inventory_transactions')
-            .select('id').eq('quoteId', id).eq('type', 'consumption').limit(1);
-        if (!existingTxns || existingTxns.length === 0) {
-            const { data: inventories } = await supabase.from('inventory').select('*').gt('availableM2', 0).order('purchasedAt', { ascending: true });
-            let remaining = parseFloat(quote.totalM2);
-            for (const inv of inventories || []) {
-                if (remaining <= 0) break;
-                const debit = Math.min(remaining, parseFloat(inv.availableM2));
-                await supabase.from('inventory').update({ availableM2: parseFloat(inv.availableM2) - debit }).eq('id', inv.id);
-                await supabase.from('inventory_transactions').insert({ inventoryId: inv.id, quoteId: id, type: 'consumption', m2Amount: debit, createdBy: req.user.id });
-                remaining -= debit;
-            }
-            console.log('[INVENTORY] Deducted', parseFloat(quote.totalM2), 'm² for quote', id);
-        } else {
-            console.log('[INVENTORY] Already deducted for quote', id, '- skipping');
-        }
-    }
-    logUserAction({ userId: req.user.id, username: req.user.username || req.user.name, action: 'QUOTE_STATUS_CHANGE', details: `Or\u00e7amento #${id} (${quote?.clientName}) → ${status}`, menu: 'Or\u00e7amentos', ipAddress: getClientIP(req) });
     res.json(quote);
 });
 
-app.get('/api/quotes/:id/bends', authenticate as any, async (req: any, res) => {
-    const id = parseInt(req.params.id);
-    // Check access: user can only see their own quotes' bends
-    const { data: quote } = await supabase.from('quotes').select('clientId').eq('id', id).single();
-    if (!quote) return res.status(404).json({ error: 'Not found' });
-    if (req.user.role === 'user' && quote.clientId !== req.user.id) return res.status(403).json({ error: 'Acesso negado' });
-    const { data, error } = await supabase.from('quote_bends').select('*').eq('quoteId', id).order('bendOrder', { ascending: true });
-    if (error) return res.status(500).json({ error: error.message });
-    res.json(data || []);
-});
-
+// ── DISCOUNTS & PROOF ─────────────────────────────────────────────────────────
 app.post('/api/quotes/:id/discount', requireMaster as any, async (req: any, res) => {
-    const id = parseInt(req.params.id);
-    const { discountValue, reason } = req.body || {};
-    const { data: quote } = await supabase.from('quotes').select('*').eq('id', id).single();
+    const id = req.params.id; const { discountValue } = req.body || {};
+    const { data: quote } = await supabase.from('estimates').select('*').eq('id', id).eq('company_id', req.user.companyId).single();
     if (!quote) return res.status(404).json({ error: 'Not found' });
-    const finalValue = Math.max(0, (quote.totalValue || 0) - (discountValue || 0));
-    await supabase.from('quotes').update({ discountValue, finalValue, updatedAt: new Date().toISOString() }).eq('id', id);
-    await supabase.from('discount_audit').insert({ quoteId: id, originalValue: quote.totalValue, discountedValue: finalValue, appliedBy: req.user.id, reason });
-    res.json({ success: true, finalValue });
+    const finalAmount = Math.max(0, (quote.total_amount || 0) - (discountValue || 0));
+    await supabase.from('estimates').update({ discount_amount: discountValue, final_amount: finalAmount, updated_at: new Date().toISOString() }).eq('id', id).eq('company_id', req.user.companyId);
+    res.json({ success: true, finalValue: finalAmount });
 });
-
 app.post('/api/quotes/:id/proof', authenticate as any, async (req: any, res) => {
-    const id = parseInt(req.params.id);
-    const { data: quote } = await supabase.from('quotes').select('clientId').eq('id', id).single();
+    const id = req.params.id; const { data: quote } = await supabase.from('estimates').select('client_id, notes').eq('id', id).eq('company_id', req.user.companyId).single();
     if (!quote) return res.status(404).json({ error: 'Not found' });
-    if (req.user.role === 'user' && quote.clientId !== req.user.id) return res.status(403).json({ error: 'Forbidden' });
-    const { files } = await parseMultipart(req);
-    const f = files[0];
-    if (!f) return res.status(400).json({ error: 'File required' });
-    const pixProofUrl = await uploadToStorage(f.buffer, f.originalname, f.mimetype);
-    await supabase.from('quotes').update({ pixProofUrl, updatedAt: new Date().toISOString() }).eq('id', id);
-    res.json({ success: true, pixProofUrl });
+    const { files } = await parseMultipart(req); const f = files[0]; if (!f) return res.status(400).json({ error: 'File required' });
+    const url = await uploadToStorage(f.buffer, f.originalname, f.mimetype);
+    await supabase.from('estimates').update({ notes: (quote.notes || '') + `\n[COMPROVANTE: ${url}]`, updated_at: new Date().toISOString() }).eq('id', id).eq('company_id', req.user.companyId);
+    res.json({ success: true, pixProofUrl: url });
 });
 
 // ── INVENTORY ────────────────────────────────────────────────────────────────
-app.get('/api/inventory', requireAdmin as any, async (_req, res) => {
-    const { data } = await supabase.from('inventory').select('*').order('purchasedAt', { ascending: false });
+app.get('/api/inventory', requireAdmin as any, async (req: any, res) => {
+    const { data } = await supabase.from('products').select('*').eq('company_id', req.user.companyId).order('created_at', { ascending: false });
     res.json(data || []);
 });
 app.post('/api/inventory', requireAdmin as any, async (req: any, res) => {
     const { description, widthM, lengthM, costPerUnit, notes, lowStockThresholdM2 } = req.body || {};
-    const wM = parseFloat(widthM) || 1.20;
-    const lM = parseFloat(lengthM) || 33;
-    const totalM2 = wM * lM;
-    const { data, error } = await supabase.from('inventory').insert({
-        description, widthM: wM, lengthM: lM, availableM2: totalM2,
-        costPerUnit, notes, lowStockThresholdM2: parseFloat(lowStockThresholdM2) || 5,
-    }).select().single();
-    if (error) return res.status(500).json({ error: error.message });
-    await supabase.from('inventory_transactions').insert({ inventoryId: data.id, type: 'purchase', m2Amount: totalM2, createdBy: req.user.id });
-    res.json(data);
-});
-app.put('/api/inventory/:id', requireAdmin as any, async (req, res) => {
-    const { description, notes, lowStockThresholdM2, availableM2 } = req.body || {};
-    const { data, error } = await supabase.from('inventory').update({ description, notes, lowStockThresholdM2, availableM2 }).eq('id', req.params.id).select().single();
+    const wM = parseFloat(widthM) || 1.2; const lM = parseFloat(lengthM) || 33;
+    const { data, error } = await supabase.from('products').insert({ description, widthM: wM, lengthM: lM, availableM2: wM * lM, costPerUnit, notes, lowStockThresholdM2: parseFloat(lowStockThresholdM2) || 5, company_id: req.user.companyId }).select().single();
     if (error) return res.status(500).json({ error: error.message });
     res.json(data);
 });
-app.delete('/api/inventory/:id', requireAdmin as any, async (req, res) => {
-    await supabase.from('inventory').delete().eq('id', req.params.id);
+app.post('/api/inventory/batch', requireAdmin as any, async (req: any, res) => {
+    const { entries } = req.body || {}; if (!Array.isArray(entries)) return res.status(400).json({ error: 'entries required' });
+    const inserts = entries.map((e: any) => ({ description: e.description, widthM: parseFloat(e.widthM) || 1.2, lengthM: parseFloat(e.lengthM) || 33, availableM2: (parseFloat(e.widthM) || 1.2) * (parseFloat(e.lengthM) || 33), costPerUnit: parseFloat(e.costPerUnit) || 0, notes: e.notes, lowStockThresholdM2: parseFloat(e.lowStockThresholdM2) || 5, company_id: req.user.companyId }));
+    const { data, error } = await supabase.from('products').insert(inserts).select();
+    if (error) return res.status(500).json({ error: error.message });
+    res.json(data);
+});
+app.put('/api/inventory/:id', requireAdmin as any, async (req: any, res) => {
+    const { data, error } = await supabase.from('products').update(req.body).eq('id', req.params.id).eq('company_id', req.user.companyId).select().single();
+    if (error) return res.status(500).json({ error: error.message });
+    res.json(data);
+});
+app.delete('/api/inventory/:id', requireAdmin as any, async (req: any, res) => {
+    await supabase.from('products').delete().eq('id', req.params.id).eq('company_id', req.user.companyId);
     res.json({ success: true });
 });
-app.get('/api/inventory/summary', requireAdmin as any, async (_req, res) => {
-    const { data: settings } = await supabase.from('settings').select('*');
-    const sett = (settings || []).reduce((a: any, s: any) => ({ ...a, [s.key]: s.value }), {});
-    const threshold = parseFloat(sett.lowStockAlertM2 || '10');
-    const { data: inv } = await supabase.from('inventory').select('availableM2');
-    const total = (inv || []).reduce((s, i) => s + parseFloat(i.availableM2 || 0), 0);
-    res.json({ totalAvailableM2: total, lowStock: total < threshold, threshold });
-});
-// Inventory movements (entry/exit history)
-app.get('/api/inventory/movements', requireAdmin as any, async (_req, res) => {
-    try {
-        const { data: txns } = await supabase.from('inventory_transactions')
-            .select('*')
-            .order('createdAt', { ascending: false })
-            .limit(100);
-        // Enrich with inventory description
-        const invIds = [...new Set((txns || []).map(t => t.inventoryId))];
-        let invMap: Record<string, string> = {};
-        if (invIds.length > 0) {
-            const { data: invs } = await supabase.from('inventory').select('id, description').in('id', invIds);
-            invMap = (invs || []).reduce((a, i) => ({ ...a, [i.id]: i.description }), {});
-        }
-        const enriched = (txns || []).map(t => ({
-            ...t,
-            inventoryDescription: invMap[t.inventoryId] || `Bobina #${t.inventoryId}`,
-        }));
-        res.json(enriched);
-    } catch (e: any) {
-        console.error('[INVENTORY] movements error:', e.message);
-        res.status(500).json({ error: e.message });
-    }
-});
 
-app.get('/api/financial', requireAdmin as any, async (req, res) => {
+// ── FINANCIAL ───────────────────────────────────────────────────────────────
+app.get('/api/financial', authenticate as any, async (req: any, res) => {
     const { from, to, method } = req.query;
-    let q = supabase.from('financial_records').select('*').order('paidAt', { ascending: false });
-    if (from) q = q.gte('paidAt', from as string);
-    if (to) q = q.lte('paidAt', to as string);
-    if (method) q = q.eq('paymentMethod', method as string);
-    const { data, error } = await q;
-    if (error) return res.status(500).json({ error: error.message });
-    res.json(data || []);
+    let q = supabase.from('payments').select('*, estimates(*)').eq('company_id', req.user.companyId).order('paid_at', { ascending: false });
+    if (from) q = q.gte('paid_at', from as string); if (to) q = q.lte('paid_at', to as string); if (method) q = q.eq('payment_method', method as string);
+    const { data, error } = await q; if (error) return res.status(500).json({ error: error.message });
+    res.json((data || []).map((p: any) => ({ ...p, paidAt: p.paid_at, paymentMethod: p.payment_method, netValue: p.amount, clientName: p.estimates?.clientName || 'Cliente' })));
 });
-app.get('/api/financial/summary', requireAdmin as any, async (_req, res) => {
-    const now = new Date();
-    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
-    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
-    const [all, today, month] = await Promise.all([
-        supabase.from('financial_records').select('netValue'),
-        supabase.from('financial_records').select('netValue').gte('paidAt', todayStart),
-        supabase.from('financial_records').select('netValue').gte('paidAt', monthStart),
-    ]);
-    const sum = (rows: any[]) => rows.reduce((a, r) => a + parseFloat(r.netValue || 0), 0);
-    const allD = all.data || []; const todD = today.data || []; const monD = month.data || [];
-    res.json({
-        totalAll: sum(allD), totalToday: sum(todD), totalMonth: sum(monD),
-        countAll: allD.length, countToday: todD.length, countMonth: monD.length,
-        ticketAverage: allD.length > 0 ? sum(allD) / allD.length : 0,
-    });
+app.get('/api/financial/summary', authenticate as any, async (req: any, res) => {
+    const now = new Date(); const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString(); const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
+    const { data: all } = await supabase.from('payments').select('amount, paid_at').eq('company_id', req.user.companyId);
+    if (!all) return res.json({ totalAll: 0, totalToday: 0, totalMonth: 0, countAll: 0, countToday: 0, countMonth: 0, ticketAverage: 0 });
+    const sum = (rows: any[]) => rows.reduce((a, r) => a + parseFloat(r.amount || 0), 0);
+    const today = all.filter(r => r.paid_at >= todayStart); const month = all.filter(r => r.paid_at >= monthStart);
+    res.json({ totalAll: sum(all), totalToday: sum(today), totalMonth: sum(month), countAll: all.length, countToday: today.length, countMonth: month.length, ticketAverage: all.length > 0 ? sum(all) / all.length : 0 });
 });
 
 // ── REPORT SETTINGS ─────────────────────────────────────────────────────────────
 app.post('/api/report-settings', requireAdmin as any, async (req: any, res) => {
-    try {
-        const ct = req.headers['content-type'] || '';
-        let fields: Record<string, string> = {};
-        let logoUrl: string | null = null;
-        if (ct.includes('multipart/form-data')) {
-            const parsed = await parseMultipart(req);
-            fields = parsed.fields;
-            const f = parsed.files.find((x: any) => x.fieldname === 'reportLogoFile');
-            if (f) logoUrl = await uploadToStorage(f.buffer, f.originalname, f.mimetype);
-        } else {
-            fields = req.body || {};
-        }
-        const keys = ['reportCompanyName', 'reportHeaderText', 'reportFooterText', 'reportPhone', 'reportEmail', 'reportAddress'];
-        for (const key of keys) {
-            if (fields[key] !== undefined) {
-                await supabase.from('settings').upsert({ key, value: fields[key] }, { onConflict: 'key' });
-            }
-        }
-        if (logoUrl) {
-            await supabase.from('settings').upsert({ key: 'reportLogo', value: logoUrl }, { onConflict: 'key' });
-        }
-        res.json({ success: true });
-    } catch (e: any) {
-        console.error('[REPORT] Error saving settings:', e.message);
-        res.status(500).json({ error: e.message });
+    const parsed = req.headers['content-type']?.includes('multipart/form-data') ? await parseMultipart(req) : { fields: req.body, files: [] };
+    const { fields, files } = parsed;
+    for (const key of ['reportCompanyName', 'reportHeaderText', 'reportFooterText', 'reportPhone', 'reportEmail', 'reportAddress']) {
+        if (fields[key] !== undefined) await supabase.from('settings').upsert({ key, value: fields[key], company_id: req.user.companyId }, { onConflict: 'key, company_id' });
     }
+    const f = files.find(x => x.fieldname === 'reportLogoFile');
+    if (f) { const url = await uploadToStorage(f.buffer, f.originalname, f.mimetype); await supabase.from('settings').upsert({ key: 'reportLogo', value: url, company_id: req.user.companyId }, { onConflict: 'key, company_id' }); }
+    res.json({ success: true });
 });
 
 // ── PIX KEYS ─────────────────────────────────────────────────────────────────
 app.get('/api/pix-keys', async (_req, res) => {
-    const { data } = await supabase.from('pix_keys').select('*').eq('active', true).order('sortOrder', { ascending: true });
-    res.json(data || []);
-});
-app.get('/api/pix-keys/all', requireMaster as any, async (_req, res) => {
-    const { data } = await supabase.from('pix_keys').select('*').order('sortOrder', { ascending: true });
-    res.json(data || []);
+    const { data } = await supabase.from('pix_keys').select('*').order('sort_order', { ascending: true });
+    res.json((data || []).map(k => ({ ...k, pixKey: k.pix_key, pixCode: k.pix_code, qrCodeUrl: k.qr_code_url, sortOrder: k.sort_order })));
 });
 app.post('/api/pix-keys', requireMaster as any, async (req, res) => {
-    const ct = req.headers['content-type'] || '';
-    let label: string, pixKey: string, pixCode: string, qrCodeUrl: string | null = null;
-    if (ct.includes('multipart/form-data')) {
-        const { fields, files } = await parseMultipart(req);
-        label = fields.label || ''; pixKey = fields.pixKey || ''; pixCode = fields.pixCode || '';
-        const f = files.find(x => x.fieldname === 'qrCode');
-        if (f) qrCodeUrl = await uploadToStorage(f.buffer, f.originalname, f.mimetype);
-    } else {
-        ({ label, pixKey, pixCode } = req.body || {});
-        qrCodeUrl = req.body?.qrCodeUrl || null;
-    }
-    const { data, error } = await supabase.from('pix_keys').insert({
-        label: label || '', pixKey: pixKey || '', pixCode: pixCode || '',
-        qrCodeUrl: qrCodeUrl || '', active: true,
-        keyType: req.body?.keyType || 'cpf',
-        bank: req.body?.bank || '',
-        beneficiary: req.body?.beneficiary || '',
-    }).select().single();
-    if (error) return res.status(500).json({ error: error.message });
-    res.json(data);
-});
-app.put('/api/pix-keys/:id', requireMaster as any, async (req: any, res) => {
-    const id = parseInt(req.params.id);
-    const ct = req.headers['content-type'] || '';
-    let updateData: any = {};
-    if (ct.includes('multipart/form-data')) {
-        const { fields, files } = await parseMultipart(req);
-        if (fields.label !== undefined) updateData.label = fields.label;
-        if (fields.pixKey !== undefined) updateData.pixKey = fields.pixKey;
-        if (fields.pixCode !== undefined) updateData.pixCode = fields.pixCode;
-        if (fields.active !== undefined) updateData.active = fields.active === 'true';
-        if (fields.sortOrder !== undefined) updateData.sortOrder = parseInt(fields.sortOrder);
-        const f = files.find(x => x.fieldname === 'qrCode');
-        if (f) updateData.qrCodeUrl = await uploadToStorage(f.buffer, f.originalname, f.mimetype);
-    } else {
-        const { label, pixKey, pixCode, active, sortOrder, keyType, bank, beneficiary, qrCodeUrl } = req.body || {};
-        updateData = { label, pixKey, pixCode, active, sortOrder, keyType, bank, beneficiary, qrCodeUrl };
-    }
-    const { data, error } = await supabase.from('pix_keys').update(updateData).eq('id', id).select().single();
+    const { pixKey, pixCode, qrCodeUrl, sortOrder } = req.body || {};
+    const { data, error } = await supabase.from('pix_keys').insert({ pix_key: pixKey, pix_code: pixCode, qr_code_url: qrCodeUrl, sort_order: sortOrder || 0, company_id: (req as any).user.companyId }).select().single();
     if (error) return res.status(500).json({ error: error.message });
     res.json(data);
 });
 app.delete('/api/pix-keys/:id', requireMaster as any, async (req, res) => {
-    await supabase.from('pix_keys').delete().eq('id', parseInt(req.params.id));
+    await supabase.from('pix_keys').delete().eq('id', req.params.id).eq('company_id', (req as any).user.companyId);
     res.json({ success: true });
 });
 
-// ── INVENTORY BATCH ──────────────────────────────────────────────────────────
-app.post('/api/inventory/batch', requireAdmin as any, async (req: any, res) => {
-    const { entries } = req.body || {};
-    if (!Array.isArray(entries) || entries.length === 0) return res.status(400).json({ error: 'entries required' });
-    const inserts = entries.map((e: any) => {
-        const wM = parseFloat(e.widthM) || 1.20;
-        const lM = parseFloat(e.lengthM) || 33;
-        return {
-            description: e.description, widthM: wM, lengthM: lM,
-            availableM2: wM * lM, costPerUnit: parseFloat(e.costPerUnit) || 0,
-            notes: e.notes, lowStockThresholdM2: parseFloat(e.lowStockThresholdM2) || 5,
-        };
-    });
-    const { data, error } = await supabase.from('inventory').insert(inserts).select();
-    if (error) return res.status(500).json({ error: error.message });
-    // Create transactions for each
-    if (data) {
-        const txns = data.map((d: any) => ({
-            inventoryId: d.id, type: 'purchase', m2Amount: d.availableM2, createdBy: req.user.id,
-        }));
-        await supabase.from('inventory_transactions').insert(txns);
-    }
-    res.json(data);
-});
-
-// ── SEED (initial setup) ─────────────────────────────────────────────────────
-app.post('/api/seed', async (req, res) => {
-    const { token } = req.body || {};
-    if (token !== process.env.ADMIN_PASSWORD) return res.status(403).json({ error: 'Forbidden' });
-    const hashed = bcrypt.hashSync(process.env.ADMIN_PASSWORD || 'admin123', 10);
-    await supabase.from('users').upsert(
-        { username: 'admin', password: hashed, role: 'master', name: 'Administrador', active: true },
-        { onConflict: 'username' }
-    );
-    const { data: settings } = await supabase.from('settings').select('key').limit(1);
-    if (!settings?.length) {
-        await supabase.from('settings').insert([
-            { key: 'companyName', value: 'Ferreira Calhas' },
-            { key: 'whatsapp', value: '5566996172808' },
-            { key: 'whatsappMaster', value: '5566996172808' },
-            { key: 'address', value: 'Avenida Jose Goncalves, 931, Sinop - MT, Brasil' },
-            { key: 'aboutText', value: 'Especialistas em fabricação e instalação de calhas, rufos e pingadeiras em Sinop e região.' },
-            { key: 'heroTitle', value: 'Proteção e Estética para o seu Telhado' },
-            { key: 'heroSubtitle', value: 'Fabricação própria de calhas e rufos com a qualidade que sua obra merece.' },
-            { key: 'pricePerM2', value: '50' },
-            { key: 'pixKey', value: '' },
-            { key: 'pixQrCodeUrl', value: '' },
-            { key: 'lowStockAlertM2', value: '10' },
-            { key: 'email', value: '' },
-        ]);
-    }
-    res.json({ success: true, message: 'Seeded successfully' });
-});
-
-// ── USER LOGS ────────────────────────────────────────────────────────────────
-app.get('/api/user-logs', requireAdmin as any, async (req: any, res) => {
-    try {
-        const { from, to, username, action, limit: lim } = req.query;
-        let q = supabase.from('user_logs').select('*').order('createdAt', { ascending: false }).limit(parseInt(lim as string) || 200);
-        if (from) q = q.gte('createdAt', from as string);
-        if (to) q = q.lte('createdAt', to as string);
-        if (username) q = q.ilike('username', `%${username}%`);
-        if (action) q = q.ilike('action', `%${action}%`);
-        const { data, error } = await q;
-        if (error) return res.status(500).json({ error: error.message });
-        res.json(data || []);
-    } catch (e: any) { res.status(500).json({ error: e.message }); }
-});
-
-// ---------------------------------------------------------------------------
-// Vercel handler
-// ---------------------------------------------------------------------------
-export default function handler(req: VercelRequest, res: VercelResponse) {
-    return app(req as any, res as any);
-}
+export default (req: VercelRequest, res: VercelResponse) => app(req as any, res as any);

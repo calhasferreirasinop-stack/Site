@@ -51,9 +51,19 @@ export default function Admin() {
   };
   const handleAddPix = async () => {
     if (!newPix.pixKey) return showToast('Chave PIX obrigatória', 'error');
+    const payload = {
+      label: newPix.label,
+      pixKey: newPix.pixKey,       // Let server handle mapping or use common names
+      keyType: newPix.keyType,
+      bank: newPix.bank,
+      beneficiary: newPix.beneficiary,
+      pixCode: newPix.pixCode,
+      qrCodeUrl: newPix.qrCodeUrl,
+      sortOrder: 0
+    };
     const res = await fetch('/api/pix-keys', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(newPix), credentials: 'include',
+      body: JSON.stringify(payload), credentials: 'include',
     });
     if (res.ok) { showToast('PIX adicionado!', 'success'); setNewPix({ label: '', pixKey: '', keyType: 'cpf', bank: '', beneficiary: '', pixCode: '', qrCodeUrl: '' }); fetchPixKeys(); }
     else showToast('Erro ao adicionar PIX', 'error');
