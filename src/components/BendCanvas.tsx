@@ -9,6 +9,8 @@ export interface Risk {
     direction: RiskDirection;
     sizeCm: number;
     slopeData?: { side: 'D' | 'E', h1: number, h2: number };
+    slope_data?: { side: 'D' | 'E', h1: number, h2: number };
+    executionIdx?: string | number;
 }
 
 // Angle change relative to current heading (degrees)
@@ -92,10 +94,11 @@ export default function BendCanvas({ risks, maxWidthCm = 120, svgRef, exportMode
     const isOverLimit = totalWidthCm > maxWidthCm;
 
     // ── Dynamic scaling ──────────────────────────────────────────────────────
-    const CANVAS_W = 460;
-    const CANVAS_H = 220;
-    const PADDING = 45; // Increased padding for labels
+    const CANVAS_W = 640;
+    const CANVAS_H = 320;
+    const PADDING = 50;
 
+    // Find min/max in gutter units
     const xs = points.map(p => p.x);
     const ys = points.map(p => p.y);
     const rawMinX = Math.min(...xs);
@@ -103,14 +106,13 @@ export default function BendCanvas({ risks, maxWidthCm = 120, svgRef, exportMode
     const rawMinY = Math.min(...ys);
     const rawMaxY = Math.max(...ys);
 
-    // Ensure a minimum extent so a single tiny segment is still visible
-    const rawW = Math.max(rawMaxX - rawMinX, 5);
-    const rawH = Math.max(rawMaxY - rawMinY, 5);
+    const rawW = Math.max(rawMaxX - rawMinX, 1);
+    const rawH = Math.max(rawMaxY - rawMinY, 1);
 
     // Scale to fill the canvas
     const scaleX = (CANVAS_W - PADDING * 2) / rawW;
     const scaleY = (CANVAS_H - PADDING * 2) / rawH;
-    const scale = Math.min(scaleX, scaleY, 12); // cap to avoid absurd zoom for single points
+    const scale = Math.min(scaleX, scaleY, 18); // Increased cap for bigger lines
 
     const toSvg = (p: Point) => ({
         x: PADDING + (p.x - rawMinX) * scale,
@@ -129,36 +131,36 @@ export default function BendCanvas({ risks, maxWidthCm = 120, svgRef, exportMode
 
     return (
         <div className="relative w-full">
-            <div className={`rounded-2xl border-2 overflow-hidden transition-all duration-300 bg-gradient-to-br from-slate-900 to-slate-800 ${exportMode ? 'border-slate-700' : (isOverLimit ? 'border-red-500' : 'border-slate-700')}`}>
+            <div className={`rounded-3xl border-2 overflow-hidden transition-all duration-300 bg-gradient-to-br from-slate-900 to-slate-800 ${exportMode ? 'border-slate-700' : (isOverLimit ? 'border-red-500' : 'border-slate-700')}`}>
                 <svg
                     ref={svgRef}
                     width="100%"
                     viewBox={`0 0 ${CANVAS_W} ${CANVAS_H}`}
                     className="w-full"
-                    style={{ minHeight: 180, maxHeight: 260 }}
+                    style={{ minHeight: 220, maxHeight: 380 }}
                     xmlns="http://www.w3.org/2000/svg"
                 >
-                    {/* Subtle grid — HIDDEN in export mode */}
-                    {!exportMode && Array.from({ length: 24 }).map((_, i) => (
+                    {/* Subtle grid */}
+                    {!exportMode && Array.from({ length: 32 }).map((_, i) => (
                         <line key={`v${i}`} x1={i * 20} y1={0} x2={i * 20} y2={CANVAS_H}
-                            stroke="rgba(255,255,255,0.035)" strokeWidth="1" />
+                            stroke="rgba(255,255,255,0.03)" strokeWidth="1" />
                     ))}
-                    {!exportMode && Array.from({ length: 12 }).map((_, i) => (
+                    {!exportMode && Array.from({ length: 16 }).map((_, i) => (
                         <line key={`h${i}`} x1={0} y1={i * 20} x2={CANVAS_W} y2={i * 20}
-                            stroke="rgba(255,255,255,0.035)" strokeWidth="1" />
+                            stroke="rgba(255,255,255,0.03)" strokeWidth="1" />
                     ))}
 
                     {/* Sheet shadow */}
                     {pathStr && (
                         <path d={pathStr} fill="none"
-                            stroke={exportMode ? 'rgba(99,179,237,0.15)' : (isOverLimit ? 'rgba(239,68,68,0.18)' : 'rgba(99,179,237,0.18)')}
-                            strokeWidth={14} strokeLinecap="round" strokeLinejoin="round" />
+                            stroke={exportMode ? 'rgba(99,179,237,0.12)' : (isOverLimit ? 'rgba(239,68,68,0.15)' : 'rgba(99,179,237,0.15)')}
+                            strokeWidth={16} strokeLinecap="round" strokeLinejoin="round" />
                     )}
 
                     {/* Main path */}
                     {pathStr && (
                         <path d={pathStr} fill="none"
-                            stroke={strokeColor} strokeWidth={3}
+                            stroke={strokeColor} strokeWidth={4}
                             strokeLinecap="round" strokeLinejoin="round"
                             style={{ filter: glowFilter }} />
                     )}
@@ -166,59 +168,78 @@ export default function BendCanvas({ risks, maxWidthCm = 120, svgRef, exportMode
                     {/* Points + dimension labels */}
                     {scaled.map((pt, i) => (
                         <g key={i}>
-                            {/* Mid-segment label — ALWAYS shown */}
                             {i > 0 && risks[i - 1] && (() => {
                                 const prev = scaled[i - 1];
-                                const mx = (prev.x + pt.x) / 2;
-                                const my = (prev.y + pt.y) / 2;
-                                // Offset perpendicular to segment for readability
                                 const dx = pt.x - prev.x;
                                 const dy = pt.y - prev.y;
                                 const len = Math.sqrt(dx * dx + dy * dy) || 1;
-                                const nx = -dy / len * 16;
-                                const ny = dx / len * 16;
 
-                                // Calculate if labels would overlap (too close)
-                                const isTinySegment = len < 10;
+                                // Normalized vectors
+                                const ux = dx / len;
+                                const uy = dy / len;
+                                const px = -uy; // Perpendicular X
+                                const py = ux;  // Perpendicular Y
+
+                                const mx = (prev.x + pt.x) / 2;
+                                const my = (prev.y + pt.y) / 2;
+
+                                const offsetDist = 14; // Distance from risk line
+
+                                const formatCm = (num: number) => {
+                                    if (!num) return '0';
+                                    const rounded = Math.round(num * 2) / 2;
+                                    return Number.isInteger(rounded) ? rounded.toString() : rounded.toFixed(1);
+                                };
 
                                 return (
                                     <g key={i}>
                                         {/* Per-Risk Lateral Slope visual indicators */}
                                         {risks[i - 1].slopeData && (
                                             <>
-                                                {/* Transversal line in the middle of the segment */}
-                                                <line x1={mx - ny / 3} y1={my + nx / 3} x2={mx + ny / 3} y2={my - nx / 3}
-                                                    stroke="#f59e0b" strokeWidth="2.5" strokeLinecap="round" />
+                                                {/* Diagonal cut line - 3x Larger for better visibility */}
+                                                <line x1={mx - (ux - px) * 22.5} y1={my - (uy - py) * 22.5}
+                                                    x2={mx + (ux - px) * 22.5} y2={my + (uy - py) * 22.5}
+                                                    stroke="#ef4444" strokeWidth="4" strokeLinecap="round" />
 
-                                                {/* D or E indicator */}
-                                                <text x={mx} y={my} textAnchor="middle" dominantBaseline="middle"
-                                                    fill="#f59e0b" fontSize="12" fontWeight="black"
-                                                    style={{ paintOrder: 'stroke', stroke: '#1e293b', strokeWidth: 2 }}>
+                                                {/* D or E side indicator */}
+                                                <text x={mx + px * 18} y={my + py * 18} textAnchor="middle" dominantBaseline="middle"
+                                                    fill="#fbbf24" fontSize="13" fontWeight="900"
+                                                    style={{ paintOrder: 'stroke', stroke: '#1e293b', strokeWidth: 2.5 }}>
                                                     {risks[i - 1].slopeData!.side}
                                                 </text>
 
-                                                {/* H1 and H2 at the ends of the segment */}
-                                                <text x={prev.x + nx * (isTinySegment ? 1.5 : 1.2)} y={prev.y + ny * (isTinySegment ? 1.5 : 1.2)} textAnchor="middle" dominantBaseline="middle"
-                                                    fill="#fbbf24" fontSize="10" fontStyle="italic" fontWeight="black"
-                                                    style={{ paintOrder: 'stroke', stroke: '#1e293b', strokeWidth: 2 }}>
-                                                    {risks[i - 1].slopeData!.h1}
+                                                {/* H1 and H2 - positioned at CORNERS (15% and 85%) */}
+                                                <text x={prev.x + ux * (len * 0.15) + px * (offsetDist + 4)}
+                                                    y={prev.y + uy * (len * 0.15) + py * (offsetDist + 4)}
+                                                    textAnchor="middle" dominantBaseline="middle"
+                                                    fill="#fbbf24" fontSize="11" fontStyle="italic" fontWeight="black"
+                                                    style={{ paintOrder: 'stroke', stroke: '#1e293b', strokeWidth: 2.5 }}>
+                                                    {formatCm(risks[i - 1].slopeData!.h1)}
                                                 </text>
-                                                <text x={pt.x + nx * (isTinySegment ? 1.5 : 1.2)} y={pt.y + ny * (isTinySegment ? 1.5 : 1.2)} textAnchor="middle" dominantBaseline="middle"
-                                                    fill="#fbbf24" fontSize="10" fontStyle="italic" fontWeight="black"
-                                                    style={{ paintOrder: 'stroke', stroke: '#1e293b', strokeWidth: 2 }}>
-                                                    {risks[i - 1].slopeData!.h2}
+                                                <text x={prev.x + ux * (len * 0.85) + px * (offsetDist + 4)}
+                                                    y={prev.y + uy * (len * 0.85) + py * (offsetDist + 4)}
+                                                    textAnchor="middle" dominantBaseline="middle"
+                                                    fill="#fbbf24" fontSize="11" fontStyle="italic" fontWeight="black"
+                                                    style={{ paintOrder: 'stroke', stroke: '#1e293b', strokeWidth: 2.5 }}>
+                                                    {formatCm(risks[i - 1].slopeData!.h2)}
                                                 </text>
                                             </>
                                         )}
 
-                                        {!risks[i - 1].slopeData && (
-                                            <text x={mx + nx * (isTinySegment ? 1.4 : 1)} y={my + ny * (isTinySegment ? 1.4 : 1)}
-                                                textAnchor="middle" dominantBaseline="middle"
-                                                fill="rgba(255,255,255,0.95)" fontSize={exportMode ? "11" : "10"} fontWeight="black"
-                                                style={{ paintOrder: 'stroke', stroke: '#1e293b', strokeWidth: 3 }}>
-                                                {risks[i - 1].sizeCm}cm
-                                            </text>
-                                        )}
+                                        {!risks[i - 1].slopeData && (() => {
+                                            // Improved overlap prevention: alternate label side and increase distance
+                                            const sideMultiplier = (i % 2 === 0) ? 1.5 : -1.5;
+                                            const finalOffset = 22 * sideMultiplier;
+                                            return (
+                                                <text x={mx + px * finalOffset} y={my + py * finalOffset}
+                                                    textAnchor="middle" dominantBaseline="middle"
+                                                    fill="rgba(255,255,255,1)" fontSize={exportMode ? "15" : "14"} fontWeight="900"
+                                                    style={{ paintOrder: 'stroke', stroke: '#111', strokeWidth: 4.5 }}>
+                                                    {risks[i - 1].executionIdx !== undefined && `(${risks[i - 1].executionIdx}) `}
+                                                    {formatCm(risks[i - 1].sizeCm)}
+                                                </text>
+                                            );
+                                        })()}
                                     </g>
                                 );
                             })()}

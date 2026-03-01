@@ -457,6 +457,7 @@ app.put('/api/quotes/:id', authenticate as any, async (req: any, res) => {
 });
 app.get('/api/quotes/:id/bends', authenticate as any, async (req: any, res) => {
     const id = req.params.id;
+    console.log(`[TRACE_SLUG_BENDS_1234] ID: ${id}`);
     const { data: quote } = await supabase.from('estimates').select('client_id').eq('id', id).eq('company_id', req.user.companyId).single();
     if (!quote) return res.status(404).json({ error: 'Orçamento não encontrado' });
     if (req.user.role === 'user' && quote.client_id !== req.user.id) return res.status(403).json({ error: 'Acesso negado' });

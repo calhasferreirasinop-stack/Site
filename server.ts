@@ -206,8 +206,131 @@ const requireMaster = async (req: any, res: any, next: any) => {
 };
 
 // =====================
+// EMERGENCY SETUP Route (fixes missing schema columns + creates admin)
+// =====================
+app.post('/api/setup', async (req: any, res) => {
+  const { secret } = req.body || {};
+  if (secret !== 'ferreira-setup-2024') return res.status(403).json({ error: 'Forbidden' });
+
+  const results: string[] = [];
+
+  // 1. Get first company
+  const { data: company } = await supabase.from('companies').select('id, name').limit(1).single();
+  if (!company) return res.status(500).json({ error: 'No company found.' });
+  const companyId = company.id;
+  results.push(`Company: ${companyId} (${company.name})`);
+
+  // 2. Get existing profiles
+  const { data: profiles } = await supabase.from('profiles').select('*');
+  results.push(`Profiles in DB: ${profiles?.length || 0}`);
+
+  // 3. List Supabase Auth users
+  const { data: authData } = await supabase.auth.admin.listUsers();
+  const authUserList = (authData?.users || []) as Array<{ id: string; email?: string }>;
+  results.push(`Auth users: ${authUserList.length}`);
+  authUserList.forEach((u: any) => results.push(`  Auth user: ${u.id} | ${u.email}`));
+  profiles?.forEach((p: any) => results.push(`  Profile: ${p.id} | username: ${p.username} | role: ${p.role}`));
+
+  // 4. Check if admin profile already has the correct auth user linked
+  const adminEmail = 'admin@ferreiracalhas.com';
+  const existingAuthAdmin = authUserList.find((u: any) => u.email === adminEmail);
+
+  let adminProfileId: string | null = null;
+
+  if (existingAuthAdmin) {
+    results.push(`Auth admin already exists: ${existingAuthAdmin.id}`);
+
+    // Update password in auth
+    await supabase.auth.admin.updateUserById(existingAuthAdmin.id, { password: 'admin123' });
+    results.push(`Auth password reset to admin123`);
+
+    adminProfileId = existingAuthAdmin.id;
+
+    // Check if profile with this ID exists
+    const existingProfile = profiles?.find(p => p.id === existingAuthAdmin.id);
+    if (!existingProfile) {
+      // Create profile for this auth user
+      const { error: profErr } = await supabase.from('profiles').insert({
+        id: existingAuthAdmin.id,
+        company_id: companyId,
+        name: 'Admin Ferreira',
+        role: 'master',
+        username: 'admin',
+        password: bcrypt.hashSync('admin123', 10),
+        active: true,
+      });
+      results.push(profErr ? `✗ Create profile: ${profErr.message}` : `✓ Created profile for auth admin`);
+    } else {
+      // Update existing profile
+      const { error: updErr } = await supabase.from('profiles').update({
+        role: 'master',
+        username: 'admin',
+        password: bcrypt.hashSync('admin123', 10),
+        active: true,
+        name: existingProfile.name || 'Admin Ferreira',
+      }).eq('id', existingAuthAdmin.id);
+      results.push(updErr ? `✗ Update profile: ${updErr.message}` : `✓ Updated profile for auth admin`);
+    }
+  } else {
+    // Create new auth user
+    results.push(`Creating new auth user: ${adminEmail}`);
+    const { data: newAuth, error: createErr } = await supabase.auth.admin.createUser({
+      email: adminEmail,
+      password: 'admin123',
+      email_confirm: true,
+      user_metadata: { name: 'Admin Ferreira', company_id: companyId, role: 'master' }
+    });
+
+    if (createErr) {
+      results.push(`✗ Create auth user: ${createErr.message}`);
+      // Fallback: try to use the first existing profile with just username/password
+      const firstProfile = profiles?.[0];
+      if (firstProfile) {
+        const { error: updErr } = await supabase.from('profiles').update({
+          username: 'admin',
+          password: bcrypt.hashSync('admin123', 10),
+          active: true,
+          role: 'master',
+        }).eq('id', firstProfile.id);
+        results.push(updErr ? `✗ Fallback update: ${updErr.message}` : `✓ Fallback: set first profile as admin (username-only login)`);
+        adminProfileId = firstProfile.id;
+      }
+    } else {
+      adminProfileId = newAuth.user.id;
+      results.push(`✓ Created auth user: ${newAuth.user.id}`);
+
+      // Create or update profile
+      const existingProfile = profiles?.find(p => p.id === newAuth.user.id);
+      if (!existingProfile) {
+        const { error: profErr } = await supabase.from('profiles').insert({
+          id: newAuth.user.id,
+          company_id: companyId,
+          name: 'Admin Ferreira',
+          role: 'master',
+          username: 'admin',
+          password: bcrypt.hashSync('admin123', 10),
+          active: true,
+        });
+        results.push(profErr ? `✗ Create profile: ${profErr.message}` : `✓ Created profile`);
+      }
+    }
+  }
+
+  res.json({
+    success: true,
+    results,
+    adminProfileId,
+    message: 'Login with: admin / admin123 (fallback username/password login)',
+    note: 'If Supabase Auth login fails, the system uses the username/password stored in profiles table as fallback.'
+  });
+});
+
+// =====================
 // AUTH Routes
 // =====================
+
+
+
 app.post('/api/login', async (req, res) => {
   if (!checkRateLimit(req.ip, 10)) {
     console.warn(`[SECURITY] Login rate limit exceeded for IP: ${req.ip}`);
@@ -223,7 +346,12 @@ app.post('/api/login', async (req, res) => {
   const email = username.includes('@') ? username : `${username}@ferreiracalhas.com`;
 
   try {
-    const { data: authData, error: authError } = await supabase.auth.signInWithPassword({
+    // Create a temporary client to avoid mutating the global service-role client's state with the user session
+    const tempClient = createClient(process.env.SUPABASE_URL!, process.env.SUPABASE_ANON_KEY! || process.env.SUPABASE_SERVICE_ROLE_KEY!, {
+      auth: { persistSession: false, autoRefreshToken: false }
+    });
+
+    const { data: authData, error: authError } = await tempClient.auth.signInWithPassword({
       email,
       password
     });
@@ -283,8 +411,8 @@ app.get('/api/auth/check', async (req, res) => {
   if (user) {
     res.json({ authenticated: true, role: user.role, name: user.name || user.username, id: user.id });
   } else if (legacyCookie === 'authenticated') {
-    // Legacy support: get admin user
-    const { data: adminUser } = await supabase.from('users').select('id,username,role,name').eq('username', 'admin').single();
+    // Legacy support: get admin user from profiles table
+    const { data: adminUser } = await supabase.from('profiles').select('id,username,role,name').eq('username', 'admin').single();
     if (adminUser) {
       res.json({ authenticated: true, role: adminUser.role, name: adminUser.name || adminUser.username, id: adminUser.id });
     } else {
@@ -304,7 +432,7 @@ app.post('/api/auth/change-password', authenticate, async (req: any, res) => {
   const { newPassword } = req.body;
   if (!newPassword || newPassword.length < 6) return res.status(400).json({ error: 'Mínimo 6 caracteres' });
   const hashed = bcrypt.hashSync(newPassword, 10);
-  await supabase.from('users').update({ password: hashed }).eq('id', req.user.id);
+  await supabase.from('profiles').update({ password: hashed }).eq('id', req.user.id).eq('company_id', req.user.companyId);
   res.json({ success: true });
 });
 
@@ -1042,8 +1170,9 @@ app.put('/api/quotes/:id', authenticate, async (req: any, res) => {
 
 app.get('/api/quotes/:id', authenticate, async (req: any, res) => {
   const id = req.params.id; // UUID
+  console.log(`[TRACE_QUOTE_GET_1234] ID: ${id}`);
   const { data: estimate, error } = await supabase.from('estimates')
-    .select('*, items:estimate_items(*)')
+    .select('*, items:estimate_items(id, description)')
     .eq('id', id)
     .eq('company_id', req.user.companyId)
     .single();
@@ -1068,25 +1197,44 @@ app.get('/api/quotes/:id', authenticate, async (req: any, res) => {
       if (i.description && i.description.startsWith('[BEND] ')) {
         try { return JSON.parse(i.description.substring(7)); } catch { return {}; }
       }
-      return i.metadata || {};
+      return {};
     })
   });
 });
 
 app.get('/api/quotes/:id/bends', authenticate, async (req: any, res) => {
-  const id = req.params.id; // UUID
-  console.log(`[DEBUG_BENDS] Fetching for quote: ${id} | User: ${req.user.id}`);
+  const id = req.params.id;
+  console.log(`[TRACE_V3_UNIQUE_1234] Fetching for quote: ${id} | User: ${req.user.id}`);
+
+  // Basic UUID format check to avoid Postgres casting errors
+  const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  if (!uuidRegex.test(id)) {
+    console.warn(`[DEBUG_BENDS] Invalid UUID format received: ${id}`);
+    return res.status(400).json({ error: 'ID de orçamento inválido' });
+  }
+
   const { data, error } = await supabase.from('estimate_items')
-    .select('description, metadata')
+    .select('description')
     .eq('estimate_id', id);
 
-  if (error) return res.status(500).json({ error: error.message });
-  res.json((data || []).map((i: any) => {
+  if (error) {
+    console.error(`[DEBUG_BENDS_HIT_V2] DB Error: ${error.message} (code: ${error.code})`);
+    return res.status(500).json({ error: 'Erro interno ao buscar dobras' });
+  }
+
+  if (!data || data.length === 0) {
+    console.log(`[DEBUG_BENDS] No items found for quote: ${id}`);
+    return res.json([]);
+  }
+
+  const result = data.map((i: any) => {
     if (i.description && i.description.startsWith('[BEND] ')) {
       try { return JSON.parse(i.description.substring(7)); } catch { return {}; }
     }
-    return i.metadata || {};
-  }));
+    return {};
+  });
+
+  res.json(result);
 });
 
 app.put('/api/quotes/:id/status', authenticate, async (req: any, res) => {
@@ -1145,7 +1293,6 @@ async function debitInventory(estimateId: number, m2Needed: number, userId: stri
       action: 'inventory_consumption',
       entity_type: 'product',
       entity_id: prod.id,
-      metadata: { estimateId, amount: debit }
     });
     remaining -= debit;
   }
@@ -1326,7 +1473,66 @@ app.delete('/api/pix-keys/:id', requireAdmin, async (req: any, res) => {
 });
 
 // =====================
-// REPORT SETTINGS Routes
+// DB MIGRATION Route (run-once to fix schema)
+// =====================
+app.post('/api/admin/migrate', requireMaster, async (req: any, res) => {
+  const sqlStatements = [
+    `ALTER TABLE public.activity_logs ADD COLUMN IF NOT EXISTS metadata jsonb`,
+    `CREATE TABLE IF NOT EXISTS public.pix_keys (
+      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      company_id uuid REFERENCES public.companies(id) ON DELETE CASCADE,
+      label text, pix_key text NOT NULL, key_type text, bank text, beneficiary text,
+      pix_code text, qr_code_url text, sort_order integer DEFAULT 0, created_at timestamptz DEFAULT now()
+    )`,
+    `CREATE TABLE IF NOT EXISTS public.settings (
+      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      company_id uuid REFERENCES public.companies(id) ON DELETE CASCADE,
+      key text NOT NULL, value text, created_at timestamptz DEFAULT now()
+    )`,
+    `CREATE TABLE IF NOT EXISTS public.services (
+      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      company_id uuid REFERENCES public.companies(id) ON DELETE CASCADE,
+      title text NOT NULL, description text, "imageUrl" text, created_at timestamptz DEFAULT now()
+    )`,
+    `CREATE TABLE IF NOT EXISTS public.posts (
+      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      company_id uuid REFERENCES public.companies(id) ON DELETE CASCADE,
+      title text NOT NULL, content text, "imageUrl" text, created_at timestamptz DEFAULT now()
+    )`,
+    `CREATE TABLE IF NOT EXISTS public.gallery (
+      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      company_id uuid REFERENCES public.companies(id) ON DELETE CASCADE,
+      service_id uuid REFERENCES public.services(id) ON DELETE SET NULL,
+      "imageUrl" text, description text, created_at timestamptz DEFAULT now()
+    )`,
+    `CREATE TABLE IF NOT EXISTS public.testimonials (
+      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      company_id uuid REFERENCES public.companies(id) ON DELETE CASCADE,
+      author text, content text, rating integer DEFAULT 5, created_at timestamptz DEFAULT now()
+    )`,
+    `ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS username text`,
+    `ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS password text`,
+    `ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS active boolean DEFAULT true`,
+    `ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS phone text`,
+    `ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS email text`,
+    `ALTER TABLE public.estimates ADD COLUMN IF NOT EXISTS updated_at timestamptz`,
+    `ALTER TABLE public.payments ADD COLUMN IF NOT EXISTS payment_method text`,
+    `ALTER TABLE public.payments ADD COLUMN IF NOT EXISTS paid_at timestamptz`,
+  ];
+
+  const results: { sql: string; ok: boolean; error?: string }[] = [];
+  for (const sql of sqlStatements) {
+    try {
+      const { error } = await supabase.rpc('exec_sql', { sql });
+      results.push({ sql: sql.trim().substring(0, 60) + '...', ok: !error, error: error?.message });
+    } catch (e: any) {
+      results.push({ sql: sql.trim().substring(0, 60) + '...', ok: false, error: e.message });
+    }
+  }
+  res.json({ results });
+});
+
+
 // =====================
 app.post('/api/report-settings', requireAdmin, upload.single('reportLogoFile'), async (req: any, res) => {
   try {
